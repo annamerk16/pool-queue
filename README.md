@@ -11,7 +11,7 @@ A live queue for the dorm pool table. People join from their phones, the winner 
 - Only the two people currently playing can tap "X won," so random people can't skip the line.
 - The winner keeps their seat and builds a streak. The next person in line steps up.
 - The loser rejoins the back of the line if their "put me back" box is checked.
-- An optional admin code lets you remove ghosts (people who left without tapping Leave) and clear everything.
+- An optional admin code unlocks setup tools: add people by name (to the back or front of the line), reorder the line, toggle anyone's requeue setting, remove people who walked off, report any result, and clear everything. People an admin adds don't need a phone.
 
 ## Deploy (about 5 minutes)
 

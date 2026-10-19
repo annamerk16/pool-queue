@@ -129,6 +129,35 @@ function apply(s, body) {
       return;
     }
 
+    // ---- admin setup tools ----
+    case "addPlayer": {
+      if (!isAdmin) throw new UserError("Admin code required");
+      const name = clean(body.name);
+      if (!name) throw new UserError("Enter a name");
+      // admin-added players aren't tied to any phone
+      const p = { id: uid(), name, clientId: "admin-" + uid(), requeue: body.requeue !== false, addedByAdmin: true };
+      if (body.front) s.queue.unshift(p); else s.queue.push(p);
+      fillTable(s);
+      return;
+    }
+
+    case "move": {
+      if (!isAdmin) throw new UserError("Admin code required");
+      const i = s.queue.findIndex((p) => p.id === body.playerId);
+      if (i < 0) throw new UserError("Player not in line");
+      const j = body.to === "front" ? 0 : i + (body.dir > 0 ? 1 : -1);
+      if (j < 0 || j >= s.queue.length) return;
+      const [p] = s.queue.splice(i, 1);
+      s.queue.splice(j, 0, p);
+      return;
+    }
+
+    case "adminRequeue": {
+      if (!isAdmin) throw new UserError("Admin code required");
+      for (const p of [...s.queue, ...s.table]) if (p && p.id === body.playerId) p.requeue = !!body.requeue;
+      return;
+    }
+
     case "remove": {
       if (!isAdmin) throw new UserError("Admin code required");
       s.queue = s.queue.filter((p) => p.id !== body.playerId);

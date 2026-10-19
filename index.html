@@ -95,6 +95,9 @@
   li.mine { background: color-mix(in srgb, var(--felt-2) 10%, var(--card)); }
   li .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); padding: 2px 6px; border-radius: 99px; }
+  .admin-row { display: flex; gap: 4px; flex: none; }
+  .admin-row button { min-width: 32px; padding: 6px 8px; }
+  .admin-row button.on { background: var(--felt-2); color: #fff; border-color: var(--felt-2); }
   .empty-q { padding: 18px; text-align: center; color: var(--muted); }
 
   .log { font-size: 13px; color: var(--muted); margin: 0; padding: 0; list-style: none; }
@@ -155,6 +158,22 @@
     </div>
   </div>
 
+  <!-- ADMIN: ADD PLAYERS -->
+  <div id="adminAdd" class="hidden">
+    <h2>Add players <span class="tag" style="vertical-align:middle">admin</span></h2>
+    <div class="card">
+      <form class="row" id="addForm">
+        <input type="text" id="addName" placeholder="Name" maxlength="24" autocomplete="off" />
+        <button type="submit">Add</button>
+      </form>
+      <div class="row" style="margin-top:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+        <label class="toggle" style="margin:0"><input type="checkbox" id="addRequeue" checked /> Requeue on loss</label>
+        <label class="toggle" style="margin:0"><input type="checkbox" id="addFront" /> Add to front</label>
+      </div>
+      <p style="margin:10px 0 0;color:var(--muted);font-size:13px">Tip: add a few names in a row to set up the line. The first two go straight to the table.</p>
+    </div>
+  </div>
+
   <!-- QUEUE -->
   <h2 id="queueTitle">Up next</h2>
   <div class="queuebox"><ol class="queue" id="queue"></ol></div>
@@ -172,7 +191,7 @@
         <button class="ghost" id="adminBtn">Unlock</button>
       </div>
       <div id="adminTools" class="hidden">
-        <p style="margin:0 0 10px;color:var(--muted);font-size:13px">Admin mode on: you can remove anyone (✕) and report any result.</p>
+        <p style="margin:0 0 10px;color:var(--muted);font-size:13px">Admin mode on: add people above, reorder the line (↑ ↓), toggle requeue (↻), remove anyone (✕), and report any result.</p>
         <div class="row">
           <button class="danger" id="resetBtn" style="flex:1">Clear everything</button>
           <button class="ghost" id="adminOff">Lock</button>
@@ -282,8 +301,14 @@ function render() {
       <li class="${p.clientId === clientId ? "mine" : ""}">
         <span class="num">${i + 1}</span>
         <span class="grow">${esc(p.name)}${p.clientId === clientId ? " (you)" : ""}</span>
-        ${p.requeue ? `<span class="tag" title="Rejoins the line after losing">↻</span>` : ""}
-        ${isAdmin ? `<button class="small danger" data-remove="${p.id}">✕</button>` : ""}
+        ${isAdmin
+          ? `<span class="admin-row">
+               <button class="small ghost ${p.requeue ? "on" : ""}" data-requeue="${p.id}" data-val="${p.requeue ? 0 : 1}" title="Requeue on loss">↻</button>
+               <button class="small ghost" data-move="${p.id}" data-dir="-1" ${i === 0 ? "disabled" : ""} title="Move up">↑</button>
+               <button class="small ghost" data-move="${p.id}" data-dir="1" ${i === state.queue.length - 1 ? "disabled" : ""} title="Move down">↓</button>
+               <button class="small danger" data-remove="${p.id}" title="Remove">✕</button>
+             </span>`
+          : (p.requeue ? `<span class="tag" title="Rejoins the line after losing">↻</span>` : "")}
       </li>`).join("")
     : `<li class="empty-q">Nobody waiting.</li>`;
 
@@ -294,6 +319,7 @@ function render() {
 
   // admin
   $("adminBox").classList.toggle("hidden", !state.adminEnabled);
+  $("adminAdd").classList.toggle("hidden", !isAdmin);
   $("adminLogin").classList.toggle("hidden", isAdmin);
   $("adminTools").classList.toggle("hidden", !isAdmin);
 }
@@ -316,8 +342,19 @@ $("winbtns").addEventListener("click", (e) => {
   if (confirm(`Confirm: ${name} won?`)) post({ action: "win", winnerId: id });
 });
 document.addEventListener("click", (e) => {
-  const id = e.target.dataset && e.target.dataset.remove;
-  if (id && confirm("Remove this player?")) post({ action: "remove", playerId: id });
+  const d = (e.target.closest && e.target.closest("button") || {}).dataset || {};
+  if (d.remove && confirm("Remove this player?")) post({ action: "remove", playerId: d.remove });
+  if (d.move) post({ action: "move", playerId: d.move, dir: Number(d.dir) });
+  if (d.requeue) post({ action: "adminRequeue", playerId: d.requeue, requeue: d.val === "1" });
+});
+$("addForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("addName").value.trim();
+  if (!name) return;
+  if (await post({ action: "addPlayer", name, requeue: $("addRequeue").checked, front: $("addFront").checked })) {
+    $("addName").value = ""; $("addName").focus();
+    toast(`Added ${name}`);
+  }
 });
 $("adminBtn").addEventListener("click", async () => {
   const code = $("adminInput").value;
