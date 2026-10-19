@@ -40,6 +40,9 @@
   .live { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #3cbf7a; }
   .dot.off { background: var(--red); }
+  .navlink { font: 600 13px Inter, sans-serif; color: var(--ink); text-decoration: none; border: 1px solid var(--line); padding: 5px 10px; border-radius: 99px; }
+  .headright { display: flex; align-items: center; gap: 12px; }
+  .rec { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; margin-left: 6px; }
 
   /* table */
   .table {
@@ -118,7 +121,10 @@
 <div class="wrap">
   <header>
     <h1>🎱 Pool Queue</h1>
-    <span class="live"><span class="dot" id="dot"></span><span id="liveText">Live</span></span>
+    <div class="headright">
+      <span class="live"><span class="dot" id="dot"></span><span id="liveText">Live</span></span>
+      <a class="navlink" href="/stats.html">Stats</a>
+    </div>
   </header>
 
   <!-- TABLE -->
@@ -139,10 +145,12 @@
   <h2>You</h2>
   <div class="card" id="joinCard">
     <form class="row" id="joinForm">
-      <input type="text" id="nameInput" placeholder="Your name" maxlength="24" autocomplete="nickname" required />
+      <input type="text" id="nameInput" placeholder="Your name" maxlength="24" autocomplete="nickname" list="knownNames" required />
+      <datalist id="knownNames"></datalist>
       <button type="submit">Join line</button>
     </form>
     <label class="toggle"><input type="checkbox" id="requeueJoin" checked /> Put me back in line when I lose</label>
+    <p style="margin:10px 0 0;color:var(--muted);font-size:13px">Use the same name every time and your wins and losses add up on the <a href="/stats.html" style="color:inherit">stats page</a>.</p>
   </div>
   <div class="card hidden" id="meCard">
     <div class="me">
@@ -163,7 +171,7 @@
     <h2>Add players <span class="tag" style="vertical-align:middle">admin</span></h2>
     <div class="card">
       <form class="row" id="addForm">
-        <input type="text" id="addName" placeholder="Name" maxlength="24" autocomplete="off" />
+        <input type="text" id="addName" placeholder="Name" maxlength="24" autocomplete="off" list="knownNames" />
         <button type="submit">Add</button>
       </form>
       <div class="row" style="margin-top:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
@@ -249,6 +257,18 @@ function ago(t) {
   return m < 1 ? "just now" : m < 60 ? m + "m ago" : Math.round(m / 60) + "h ago";
 }
 
+// fill name suggestions from everyone who has played before
+async function loadNames() {
+  try {
+    const r = await fetch(API + "?view=stats", { cache: "no-store" });
+    const { players } = await r.json();
+    $("knownNames").innerHTML = players.sort((a, b) => (b.lastPlayed || b.firstSeen) - (a.lastPlayed || a.firstSeen))
+      .map((p) => `<option value="${esc(p.name)}"></option>`).join("");
+  } catch {}
+}
+
+const recOf = (p) => (state.records || {})[p.id];
+
 function render() {
   if (!state) return;
   const isAdmin = !!adminCode;
@@ -260,7 +280,9 @@ function render() {
     if (!p) { el.className = "seat empty"; el.innerHTML = `<div class="name">Open seat</div>`; return; }
     el.className = "seat";
     const you = p.clientId === clientId ? " (you)" : "";
-    const streak = p.streak ? `<div class="sub"><span class="crown">♛</span> ${p.streak} win${p.streak > 1 ? "s" : ""} in a row</div>` : `<div class="sub">challenger</div>`;
+    const r = recOf(p);
+    const recTxt = r ? ` · ${r[0]}–${r[1]}` : "";
+    const streak = p.streak ? `<div class="sub"><span class="crown">♛</span> ${p.streak} win${p.streak > 1 ? "s" : ""} in a row${recTxt}</div>` : `<div class="sub">challenger${recTxt}</div>`;
     el.innerHTML = `<div class="name">${esc(p.name)}${you}</div>${streak}` +
       (isAdmin ? `<button class="small ghost" style="color:#fff;border-color:rgba(255,255,255,.3);margin-top:6px" data-remove="${p.id}">✕ remove</button>` : "");
   });
@@ -300,7 +322,7 @@ function render() {
     ? state.queue.map((p, i) => `
       <li class="${p.clientId === clientId ? "mine" : ""}">
         <span class="num">${i + 1}</span>
-        <span class="grow">${esc(p.name)}${p.clientId === clientId ? " (you)" : ""}</span>
+        <span class="grow">${esc(p.name)}${p.clientId === clientId ? " (you)" : ""}${recOf(p) ? `<span class="rec">${recOf(p)[0]}–${recOf(p)[1]}</span>` : ""}</span>
         ${isAdmin
           ? `<span class="admin-row">
                <button class="small ghost ${p.requeue ? "on" : ""}" data-requeue="${p.id}" data-val="${p.requeue ? 0 : 1}" title="Requeue on loss">↻</button>
@@ -367,6 +389,7 @@ $("resetBtn").addEventListener("click", () => { if (confirm("Clear the table, qu
 
 // poll every 3s while the tab is visible
 refresh();
+loadNames();
 setInterval(() => { if (!document.hidden && !busy) refresh(); }, 3000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 </script>

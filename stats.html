@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Pool Stats</title>
+<meta name="theme-color" content="#0f3d2e" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --felt: #0f3d2e;
+    --felt-2: #145c43;
+    --rail: #3b2416;
+    --bg: #f4f1ea;
+    --card: #ffffff;
+    --ink: #1b1b1b;
+    --muted: #6b6b6b;
+    --line: #e4dfd4;
+    --gold: #e0a526;
+    --red: #c8442f;
+    --win: #2f9e63;
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101413; --card: #1a201e; --ink: #ecebe6; --muted: #9aa39f; --line: #2a3330;
+      --win: #3cbf7a; --red: #e0604a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.45 Inter, system-ui, sans-serif;
+    padding: env(safe-area-inset-top) 0 40px;
+  }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 0 16px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; padding: 18px 0 10px; }
+  h1 { font: 700 24px "Space Grotesk", sans-serif; margin: 0; letter-spacing: -0.02em; }
+  h2 { font: 700 13px "Space Grotesk", sans-serif; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 26px 0 10px; }
+  .navlink { font: 600 13px Inter, sans-serif; color: var(--ink); text-decoration: none; border: 1px solid var(--line); padding: 5px 10px; border-radius: 99px; }
+
+  /* summary on felt, like the table on the main page */
+  .felt {
+    background: radial-gradient(ellipse at center, var(--felt-2), var(--felt) 70%);
+    border: 10px solid var(--rail); border-radius: 22px; color: #fff;
+    padding: 18px 10px; display: grid; grid-template-columns: repeat(3, 1fr); text-align: center;
+    box-shadow: inset 0 0 30px rgba(0,0,0,.35), 0 6px 20px rgba(0,0,0,.15);
+  }
+  .felt .big { font: 700 26px "Space Grotesk"; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .felt .lbl { font-size: 12px; opacity: .75; margin-top: 2px; }
+  .felt .who { font-size: 12px; color: var(--gold); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 4px; }
+
+  input[type=search] {
+    width: 100%; font: inherit; font-size: 16px; padding: 12px 14px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  }
+  .chips { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .chip { font: 600 13px Inter, sans-serif; padding: 6px 12px; border-radius: 99px; border: 1px solid var(--line); background: transparent; color: var(--ink); cursor: pointer; }
+  .chip.on { background: var(--felt); border-color: var(--felt); color: #fff; }
+  .hint { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+
+  .board { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--card); margin-top: 14px; }
+  .p { border-bottom: 1px solid var(--line); }
+  .p:last-child { border-bottom: 0; }
+  .p.mine > .prow { background: color-mix(in srgb, var(--felt-2) 10%, var(--card)); }
+  .prow { display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; width: 100%; background: none; border: 0; color: inherit; font: inherit; text-align: left; }
+  .rank { width: 26px; height: 26px; border-radius: 50%; background: var(--bg); display: grid; place-items: center; font: 700 13px "Space Grotesk"; flex: none; }
+  .rank.top { background: var(--gold); color: #3b2416; }
+  .pname { flex: 1; min-width: 0; }
+  .pname b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .bar { height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--red) 35%, transparent); margin-top: 6px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--win); }
+  .nums { text-align: right; flex: none; font-variant-numeric: tabular-nums; }
+  .nums .wl { font: 700 16px "Space Grotesk"; }
+  .nums .pct { font-size: 12px; color: var(--muted); }
+
+  .detail { padding: 4px 14px 16px 52px; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+  .stat { background: var(--bg); border-radius: 10px; padding: 8px 10px; }
+  .stat .v { font: 700 18px "Space Grotesk"; font-variant-numeric: tabular-nums; }
+  .stat .k { font-size: 11px; color: var(--muted); }
+  .sub { font: 700 11px "Space Grotesk"; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 12px 0 6px; }
+  .form { display: flex; gap: 4px; }
+  .form span { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font: 700 11px "Space Grotesk"; color: #fff; }
+  .form .W { background: var(--win); }
+  .form .L { background: var(--red); }
+  .h2h { list-style: none; margin: 0; padding: 0; }
+  .h2h li { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed var(--line); font-variant-numeric: tabular-nums; }
+  .h2h li:last-child { border-bottom: 0; }
+  .h2h .lead { color: var(--win); }
+  .h2h .trail { color: var(--red); }
+  .muted { color: var(--muted); }
+  .empty { padding: 28px 18px; text-align: center; color: var(--muted); }
+
+  .admin { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .admin select { flex: 1; min-width: 0; font: inherit; font-size: 14px; padding: 7px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  button.small { font: 600 13px Inter, sans-serif; border-radius: 8px; padding: 7px 10px; cursor: pointer; background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button.small.danger { color: var(--red); }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);
+    background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 99px; font-size: 14px;
+    opacity: 0; transition: .2s; pointer-events: none; max-width: 90vw;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>📊 Stats</h1>
+    <a class="navlink" href="/">← Queue</a>
+  </header>
+
+  <section class="felt">
+    <div><div class="big" id="sPlayers">–</div><div class="lbl">players</div></div>
+    <div><div class="big" id="sGames">–</div><div class="lbl">games played</div></div>
+    <div><div class="big" id="sStreak">–</div><div class="lbl">best streak</div><div class="who" id="sStreakWho"></div></div>
+  </section>
+
+  <h2>Leaderboard</h2>
+  <input type="search" id="search" placeholder="Find a player" autocomplete="off" />
+  <div class="chips" id="sorts">
+    <button class="chip on" data-sort="wins">Wins</button>
+    <button class="chip" data-sort="pct">Win %</button>
+    <button class="chip" data-sort="games">Games</button>
+    <button class="chip" data-sort="streak">Best streak</button>
+  </div>
+  <p class="hint" id="hint"></p>
+  <div class="board" id="board"><div class="empty">Loading…</div></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const API = "/api/queue";
+const MIN_GAMES = 5; // for ranking by win %
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function store(k) { try { return localStorage.getItem(k); } catch { return null; } }
+
+const myKey = (store("pq_name") || "").trim().toLowerCase().replace(/\s+/g, " ");
+const adminCode = store("pq_admin") || "";
+let players = [], byKey = {}, adminEnabled = false;
+let sort = "wins", open = myKey || null;
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+const games = (p) => p.wins + p.losses;
+const pct = (p) => (games(p) ? p.wins / games(p) : 0);
+const pctTxt = (p) => (games(p) ? Math.round(pct(p) * 100) + "%" : "–");
+function when(t) {
+  if (!t) return "never";
+  const d = Math.floor((Date.now() - t) / 86400000);
+  return d < 1 ? "today" : d === 1 ? "yesterday" : d < 30 ? d + " days ago" : new Date(t).toLocaleDateString();
+}
+
+function setData(data) {
+  players = data.players; adminEnabled = data.adminEnabled;
+  byKey = Object.fromEntries(players.map((p) => [p.key, p]));
+  render();
+}
+
+async function load() {
+  try {
+    const r = await fetch(API + "?view=stats", { cache: "no-store" });
+    if (!r.ok) throw new Error();
+    setData(await r.json());
+  } catch { $("board").innerHTML = `<div class="empty">Couldn't load stats. Pull to refresh.</div>`; }
+}
+
+const sorters = {
+  wins: (a, b) => b.wins - a.wins || pct(b) - pct(a),
+  pct: (a, b) => (games(b) >= MIN_GAMES) - (games(a) >= MIN_GAMES) || pct(b) - pct(a) || b.wins - a.wins,
+  games: (a, b) => games(b) - games(a) || b.wins - a.wins,
+  streak: (a, b) => b.bestStreak - a.bestStreak || b.wins - a.wins,
+};
+
+function render() {
+  // summary
+  const total = players.reduce((n, p) => n + p.wins, 0);
+  const champ = players.reduce((best, p) => (!best || p.bestStreak > best.bestStreak ? p : best), null);
+  $("sPlayers").textContent = players.length;
+  $("sGames").textContent = total;
+  $("sStreak").textContent = champ && champ.bestStreak ? champ.bestStreak : "–";
+  $("sStreakWho").textContent = champ && champ.bestStreak ? champ.name : "";
+
+  $("hint").textContent = sort === "pct" ? `Players with fewer than ${MIN_GAMES} games are listed after everyone else.` : "Tap a player to see their record.";
+
+  const ranked = [...players].sort(sorters[sort]);
+  const q = $("search").value.trim().toLowerCase();
+  const shown = ranked.map((p, i) => ({ p, rank: i + 1 })).filter(({ p }) => !q || p.name.toLowerCase().includes(q));
+
+  if (!players.length) { $("board").innerHTML = `<div class="empty">No games yet. Records start the first time someone joins the line.</div>`; return; }
+  if (!shown.length) { $("board").innerHTML = `<div class="empty">Nobody called “${esc(q)}”.</div>`; return; }
+
+  $("board").innerHTML = shown.map(({ p, rank }) => `
+    <div class="p ${p.key === myKey ? "mine" : ""}">
+      <button class="prow" data-key="${esc(p.key)}" aria-expanded="${open === p.key}">
+        <span class="rank ${rank <= 3 && games(p) ? "top" : ""}">${rank}</span>
+        <span class="pname"><b>${esc(p.name)}${p.key === myKey ? " (you)" : ""}</b>
+          <div class="bar">${games(p) ? `<i style="width:${pct(p) * 100}%"></i>` : ""}</div></span>
+        <span class="nums"><div class="wl">${p.wins}–${p.losses}</div><div class="pct">${pctTxt(p)}</div></span>
+      </button>
+      ${open === p.key ? detail(p) : ""}
+    </div>`).join("");
+}
+
+function detail(p) {
+  const h2h = Object.entries(p.vs)
+    .map(([k, [w, l]]) => ({ name: byKey[k] ? byKey[k].name : k, w, l }))
+    .sort((a, b) => b.w + b.l - (a.w + a.l));
+  const form = p.form ? [...p.form].reverse() : []; // oldest → newest, left to right
+
+  return `<div class="detail">
+    <div class="grid">
+      <div class="stat"><div class="v">${games(p)}</div><div class="k">games</div></div>
+      <div class="stat"><div class="v">${pctTxt(p)}</div><div class="k">win rate</div></div>
+      <div class="stat"><div class="v">${p.bestStreak}</div><div class="k">best streak</div></div>
+    </div>
+    <div class="sub">Last ${form.length || ""} games</div>
+    ${form.length ? `<div class="form">${form.map((r) => `<span class="${r}">${r}</span>`).join("")}</div>` : `<div class="muted">No games yet.</div>`}
+    <div class="sub">Head to head</div>
+    ${h2h.length ? `<ul class="h2h">${h2h.map((o) => `<li><span>vs ${esc(o.name)}</span><span class="${o.w > o.l ? "lead" : o.w < o.l ? "trail" : ""}">${o.w}–${o.l}</span></li>`).join("")}</ul>` : `<div class="muted">Nobody yet.</div>`}
+    <p class="muted" style="font-size:12px;margin:12px 0 0">First seen ${when(p.firstSeen)} · last played ${when(p.lastPlayed)}</p>
+    ${adminEnabled && adminCode ? `<div class="admin">
+      <select id="mergeInto"><option value="">Merge into…</option>${players.filter((o) => o.key !== p.key).sort((a, b) => a.name.localeCompare(b.name)).map((o) => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join("")}</select>
+      <button class="small" data-merge="${esc(p.key)}">Merge</button>
+      <button class="small danger" data-delete="${esc(p.key)}">Delete</button>
+    </div>` : ""}
+  </div>`;
+}
+
+async function adminPost(body) {
+  try {
+    const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ adminCode, view: "stats", ...body }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "Something went wrong");
+    setData(data); return true;
+  } catch (e) { toast(e.message); return false; }
+}
+
+$("board").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  const d = btn.dataset;
+  if (d.key) { open = open === d.key ? null : d.key; render(); return; }
+  if (d.merge) {
+    const into = $("mergeInto").value;
+    if (!into) return toast("Pick who to merge into");
+    if (confirm(`Merge ${byKey[d.merge].name}'s record into ${byKey[into].name}? This can't be undone.`) &&
+        await adminPost({ action: "mergeRecord", from: d.merge, into })) { open = into; render(); toast("Merged"); }
+  }
+  if (d.delete && confirm(`Delete ${byKey[d.delete].name}'s record for good?`) &&
+      await adminPost({ action: "deleteRecord", key: d.delete })) toast("Deleted");
+});
+$("sorts").addEventListener("click", (e) => {
+  const s = e.target.dataset.sort; if (!s) return;
+  sort = s;
+  for (const c of $("sorts").children) c.classList.toggle("on", c.dataset.sort === s);
+  render();
+});
+$("search").addEventListener("input", render);
+
+load();
+setInterval(() => { if (!document.hidden && document.activeElement.id !== "mergeInto") load(); }, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+</script>
+</body>
+</html>

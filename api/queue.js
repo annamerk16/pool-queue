@@ -1,5 +1,6 @@
 // Pool table queue API — one Vercel serverless function.
 // GET  /api/queue            -> current state
+// GET  /api/queue?view=stats -> permanent player records
 // POST /api/queue {action..} -> perform an action, returns new state
 //
 // Storage: Upstash Redis via its REST API (added from Vercel's Storage tab).
@@ -7,6 +8,7 @@
 
 const KEY = "poolqueue:state";
 const LOCK = "poolqueue:lock";
+const PLAYERS = "poolqueue:players"; // permanent records, never touched by "Clear everything"
 
 const REDIS_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -26,6 +28,7 @@ async function redis(cmd) {
       return "OK";
     }
     if (op === "DEL") { mem.delete(key); return 1; }
+    if (op === "MGET") return [key, val, ...rest].map((k) => (mem.has(k) ? mem.get(k) : null));
     throw new Error("unsupported op " + op);
   }
   const r = await fetch(REDIS_URL, {
@@ -41,12 +44,15 @@ async function redis(cmd) {
 const emptyState = () => ({ table: [null, null], queue: [], log: [], updatedAt: Date.now() });
 
 async function load() {
-  const raw = await redis(["GET", KEY]);
-  return raw ? JSON.parse(raw) : emptyState();
+  const [raw, rawPlayers] = await redis(["MGET", KEY, PLAYERS]);
+  return { s: raw ? JSON.parse(raw) : emptyState(), players: rawPlayers ? JSON.parse(rawPlayers) : {} };
 }
 async function save(s) {
   s.updatedAt = Date.now();
   await redis(["SET", KEY, JSON.stringify(s)]);
+}
+async function savePlayers(players) {
+  await redis(["SET", PLAYERS, JSON.stringify(players)]);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -67,6 +73,33 @@ async function withLock(fn) {
 // ---------- game logic ----------
 const uid = () => Math.random().toString(36).slice(2, 10);
 const clean = (n) => String(n || "").replace(/[<>]/g, "").trim().slice(0, 24);
+// "Anna", "anna" and " ANNA " all map to the same record
+const nameKey = (n) => clean(n).toLowerCase().replace(/\s+/g, " ");
+
+// Look up (or create) the permanent record for a name. The latest spelling becomes the display name.
+function register(players, name) {
+  const key = nameKey(name);
+  const rec = players[key] || (players[key] = { name, wins: 0, losses: 0, bestStreak: 0, form: "", vs: {}, firstSeen: Date.now(), lastPlayed: null });
+  rec.name = name;
+  return rec;
+}
+
+function recordGame(players, winnerName, loserName, streak) {
+  const wk = nameKey(winnerName), lk = nameKey(loserName);
+  const w = register(players, winnerName), l = register(players, loserName);
+  w.wins++; l.losses++;
+  w.bestStreak = Math.max(w.bestStreak, streak);
+  w.form = ("W" + w.form).slice(0, 10); // newest first
+  l.form = ("L" + l.form).slice(0, 10);
+  (w.vs[lk] ||= [0, 0])[0]++; // vs[opponent] = [wins, losses]
+  (l.vs[wk] ||= [0, 0])[1]++;
+  w.lastPlayed = l.lastPlayed = Date.now();
+}
+
+function nameTaken(s, name) {
+  const key = nameKey(name);
+  return [...s.queue, ...s.table].some((p) => p && nameKey(p.name) === key);
+}
 
 function fillTable(s) {
   for (let i = 0; i < 2; i++) {
@@ -82,7 +115,7 @@ function findClient(s, clientId) {
 
 class UserError extends Error {}
 
-function apply(s, body) {
+function apply(s, players, body) {
   const { action, clientId } = body;
   const isAdmin = ADMIN_CODE && body.adminCode === ADMIN_CODE;
 
@@ -92,6 +125,8 @@ function apply(s, body) {
       if (!name) throw new UserError("Enter a name");
       if (!clientId) throw new UserError("Missing device id");
       if (findClient(s, clientId)) throw new UserError("You're already in line or on the table");
+      if (nameTaken(s, name)) throw new UserError(`Someone named ${name} is already in line`);
+      register(players, name);
       s.queue.push({ id: uid(), name, clientId, requeue: !!body.requeue });
       fillTable(s);
       return;
@@ -120,6 +155,7 @@ function apply(s, body) {
       const loserSeat = s.table.indexOf(loser);
 
       winner.streak = (winner.streak || 0) + 1;
+      recordGame(players, winner.name, loser.name, winner.streak);
       s.log.unshift({ winner: winner.name, loser: loser.name, at: Date.now() });
       s.log = s.log.slice(0, 15);
 
@@ -134,6 +170,8 @@ function apply(s, body) {
       if (!isAdmin) throw new UserError("Admin code required");
       const name = clean(body.name);
       if (!name) throw new UserError("Enter a name");
+      if (nameTaken(s, name)) throw new UserError(`${name} is already in line`);
+      register(players, name);
       // admin-added players aren't tied to any phone
       const p = { id: uid(), name, clientId: "admin-" + uid(), requeue: body.requeue !== false, addedByAdmin: true };
       if (body.front) s.queue.unshift(p); else s.queue.push(p);
@@ -172,6 +210,39 @@ function apply(s, body) {
       return;
     }
 
+    // ---- admin record tools (stats page) ----
+    case "deleteRecord": {
+      if (!isAdmin) throw new UserError("Admin code required");
+      if (!players[body.key]) throw new UserError("No such player");
+      delete players[body.key];
+      for (const p of Object.values(players)) delete p.vs[body.key];
+      return;
+    }
+
+    case "mergeRecord": {
+      // fold a typo'd name (from) into the real one (into)
+      if (!isAdmin) throw new UserError("Admin code required");
+      const { from, into } = body;
+      const a = players[from], b = players[into];
+      if (!a || !b || from === into) throw new UserError("Pick two different players");
+      b.wins += a.wins; b.losses += a.losses;
+      b.bestStreak = Math.max(b.bestStreak, a.bestStreak);
+      b.firstSeen = Math.min(b.firstSeen, a.firstSeen);
+      if ((a.lastPlayed || 0) > (b.lastPlayed || 0)) { b.lastPlayed = a.lastPlayed; b.form = a.form; }
+      for (const [opp, [w, l]] of Object.entries(a.vs)) {
+        if (opp === into) continue;
+        const r = (b.vs[opp] ||= [0, 0]); r[0] += w; r[1] += l;
+      }
+      delete players[from];
+      delete b.vs[from];
+      for (const [k, p] of Object.entries(players)) {
+        if (!p.vs[from]) continue;
+        if (k !== into) { const r = (p.vs[into] ||= [0, 0]); r[0] += p.vs[from][0]; r[1] += p.vs[from][1]; }
+        delete p.vs[from];
+      }
+      return;
+    }
+
     case "checkAdmin": {
       if (!isAdmin) throw new UserError("Wrong admin code");
       return;
@@ -182,23 +253,41 @@ function apply(s, body) {
   }
 }
 
+// Win–loss for whoever is on the table or in line, so the main page can show it
+function withRecords(s, players) {
+  const records = {};
+  for (const p of [...s.table, ...s.queue]) {
+    const r = p && players[nameKey(p.name)];
+    if (r) records[p.id] = [r.wins, r.losses];
+  }
+  return { ...s, records, adminEnabled: !!ADMIN_CODE };
+}
+
+function statsView(players) {
+  return { players: Object.entries(players).map(([key, p]) => ({ key, ...p })), adminEnabled: !!ADMIN_CODE };
+}
+
 // ---------- handler ----------
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
   try {
     if (req.method === "GET") {
-      const s = await load();
-      return res.status(200).json({ ...s, adminEnabled: !!ADMIN_CODE });
+      const { s, players } = await load();
+      if (req.query && req.query.view === "stats") return res.status(200).json(statsView(players));
+      return res.status(200).json(withRecords(s, players));
     }
     if (req.method === "POST") {
       const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
-      const s = await withLock(async () => {
-        const s = await load();
-        apply(s, body);
+      const { s, players } = await withLock(async () => {
+        const { s, players } = await load();
+        const before = JSON.stringify(players);
+        apply(s, players, body);
         await save(s);
-        return s;
+        if (JSON.stringify(players) !== before) await savePlayers(players);
+        return { s, players };
       });
-      return res.status(200).json({ ...s, adminEnabled: !!ADMIN_CODE });
+      if (body.view === "stats") return res.status(200).json(statsView(players));
+      return res.status(200).json(withRecords(s, players));
     }
     res.setHeader("Allow", "GET, POST");
     return res.status(405).json({ error: "Method not allowed" });
