@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Pool Queue</title>
+<meta name="theme-color" content="#0f3d2e" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --felt: #0f3d2e;
+    --felt-2: #145c43;
+    --rail: #3b2416;
+    --chalk: #4fa3ff;
+    --bg: #f4f1ea;
+    --card: #ffffff;
+    --ink: #1b1b1b;
+    --muted: #6b6b6b;
+    --line: #e4dfd4;
+    --gold: #e0a526;
+    --red: #c8442f;
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101413; --card: #1a201e; --ink: #ecebe6; --muted: #9aa39f; --line: #2a3330;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.45 Inter, system-ui, sans-serif;
+    padding: env(safe-area-inset-top) 0 40px;
+  }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 0 16px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; padding: 18px 0 10px; }
+  h1 { font: 700 24px "Space Grotesk", sans-serif; margin: 0; letter-spacing: -0.02em; }
+  h2 { font: 700 13px "Space Grotesk", sans-serif; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 26px 0 10px; }
+  .live { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #3cbf7a; }
+  .dot.off { background: var(--red); }
+
+  /* table */
+  .table {
+    background: radial-gradient(ellipse at center, var(--felt-2), var(--felt) 70%);
+    border: 10px solid var(--rail); border-radius: 22px;
+    padding: 22px 14px; color: #fff; position: relative;
+    box-shadow: inset 0 0 30px rgba(0,0,0,.35), 0 6px 20px rgba(0,0,0,.15);
+  }
+  .seats { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
+  .vs { font: 700 14px "Space Grotesk"; opacity: .6; }
+  .seat { text-align: center; min-height: 64px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .seat .name { font: 700 20px "Space Grotesk"; word-break: break-word; }
+  .seat .sub { font-size: 12px; opacity: .75; margin-top: 2px; }
+  .seat.empty .name { opacity: .45; font-weight: 500; font-size: 15px; }
+  .crown { color: var(--gold); }
+  .winbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
+  .winbtns button { background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.25); }
+  .winbtns button:active { background: rgba(255,255,255,.25); }
+  .tablenote { text-align: center; font-size: 13px; opacity: .8; margin-top: 14px; }
+
+  /* cards */
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  .row { display: flex; gap: 8px; }
+  input[type=text], input[type=password] {
+    flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 12px 14px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  button {
+    font: 600 15px Inter, sans-serif; border: 0; border-radius: 10px; padding: 12px 16px;
+    background: var(--felt); color: #fff; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button.danger { background: transparent; color: var(--red); border: 1px solid var(--line); }
+  button.small { padding: 6px 10px; font-size: 13px; }
+  button:disabled { opacity: .5; }
+  label.toggle { display: flex; align-items: center; gap: 10px; margin-top: 12px; color: var(--muted); font-size: 14px; cursor: pointer; }
+  label.toggle input { width: 18px; height: 18px; accent-color: var(--felt-2); }
+
+  .me { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .me strong { font: 700 18px "Space Grotesk"; }
+  .pos { font: 700 36px "Space Grotesk"; color: var(--felt-2); line-height: 1; }
+
+  ol.queue { list-style: none; padding: 0; margin: 0; }
+  ol.queue li {
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+    border-bottom: 1px solid var(--line); background: var(--card);
+  }
+  ol.queue li:first-child { border-radius: var(--radius) var(--radius) 0 0; }
+  ol.queue li:last-child { border-bottom: 0; border-radius: 0 0 var(--radius) var(--radius); }
+  ol.queue li:only-child { border-radius: var(--radius); }
+  .queuebox { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .num { width: 26px; height: 26px; border-radius: 50%; background: var(--bg); display: grid; place-items: center; font: 700 13px "Space Grotesk"; flex: none; }
+  li.mine { background: color-mix(in srgb, var(--felt-2) 10%, var(--card)); }
+  li .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); padding: 2px 6px; border-radius: 99px; }
+  .empty-q { padding: 18px; text-align: center; color: var(--muted); }
+
+  .log { font-size: 13px; color: var(--muted); margin: 0; padding: 0; list-style: none; }
+  .log li { padding: 6px 0; border-bottom: 1px dashed var(--line); }
+  .log b { color: var(--ink); }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);
+    background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 99px; font-size: 14px;
+    opacity: 0; transition: .2s; pointer-events: none; max-width: 90vw;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-top: 30px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🎱 Pool Queue</h1>
+    <span class="live"><span class="dot" id="dot"></span><span id="liveText">Live</span></span>
+  </header>
+
+  <!-- TABLE -->
+  <section class="table">
+    <div class="seats">
+      <div class="seat" id="seat0"></div>
+      <div class="vs">VS</div>
+      <div class="seat" id="seat1"></div>
+    </div>
+    <div class="winbtns hidden" id="winbtns">
+      <button id="win0"></button>
+      <button id="win1"></button>
+    </div>
+    <div class="tablenote" id="tablenote"></div>
+  </section>
+
+  <!-- ME -->
+  <h2>You</h2>
+  <div class="card" id="joinCard">
+    <form class="row" id="joinForm">
+      <input type="text" id="nameInput" placeholder="Your name" maxlength="24" autocomplete="nickname" required />
+      <button type="submit">Join line</button>
+    </form>
+    <label class="toggle"><input type="checkbox" id="requeueJoin" checked /> Put me back in line when I lose</label>
+  </div>
+  <div class="card hidden" id="meCard">
+    <div class="me">
+      <div>
+        <div style="color:var(--muted);font-size:13px" id="meStatus"></div>
+        <strong id="meName"></strong>
+      </div>
+      <div class="pos" id="mePos"></div>
+    </div>
+    <label class="toggle"><input type="checkbox" id="requeueMe" /> Put me back in line when I lose</label>
+    <div class="row" style="margin-top:14px">
+      <button class="danger" id="leaveBtn" style="flex:1">Leave</button>
+    </div>
+  </div>
+
+  <!-- QUEUE -->
+  <h2 id="queueTitle">Up next</h2>
+  <div class="queuebox"><ol class="queue" id="queue"></ol></div>
+
+  <!-- LOG -->
+  <h2>Recent games</h2>
+  <ul class="log" id="log"></ul>
+
+  <!-- ADMIN -->
+  <details id="adminBox" class="hidden">
+    <summary>Admin</summary>
+    <div class="card" style="margin-top:10px">
+      <div class="row" id="adminLogin">
+        <input type="password" id="adminInput" placeholder="Admin code" />
+        <button class="ghost" id="adminBtn">Unlock</button>
+      </div>
+      <div id="adminTools" class="hidden">
+        <p style="margin:0 0 10px;color:var(--muted);font-size:13px">Admin mode on: you can remove anyone (✕) and report any result.</p>
+        <div class="row">
+          <button class="danger" id="resetBtn" style="flex:1">Clear everything</button>
+          <button class="ghost" id="adminOff">Lock</button>
+        </div>
+      </div>
+    </div>
+  </details>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const API = "/api/queue";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// stable per-device id
+function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { return null; } }
+let clientId = store("pq_client");
+if (!clientId) { clientId = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)); store("pq_client", clientId); }
+let adminCode = store("pq_admin") || "";
+$("nameInput").value = store("pq_name") || "";
+
+let state = null;
+let busy = false;
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+async function post(body) {
+  if (busy) return; busy = true;
+  try {
+    const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId, adminCode, ...body }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "Something went wrong");
+    state = data; render();
+    return true;
+  } catch (e) { toast(e.message); return false; }
+  finally { busy = false; }
+}
+
+async function refresh() {
+  try {
+    const r = await fetch(API, { cache: "no-store" });
+    if (!r.ok) throw new Error();
+    state = await r.json();
+    setLive(true); render();
+  } catch { setLive(false); }
+}
+function setLive(on) { $("dot").classList.toggle("off", !on); $("liveText").textContent = on ? "Live" : "Reconnecting…"; }
+
+function ago(t) {
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 1 ? "just now" : m < 60 ? m + "m ago" : Math.round(m / 60) + "h ago";
+}
+
+function render() {
+  if (!state) return;
+  const isAdmin = !!adminCode;
+  const [a, b] = state.table;
+
+  // seats
+  [a, b].forEach((p, i) => {
+    const el = $("seat" + i);
+    if (!p) { el.className = "seat empty"; el.innerHTML = `<div class="name">Open seat</div>`; return; }
+    el.className = "seat";
+    const you = p.clientId === clientId ? " (you)" : "";
+    const streak = p.streak ? `<div class="sub"><span class="crown">♛</span> ${p.streak} win${p.streak > 1 ? "s" : ""} in a row</div>` : `<div class="sub">challenger</div>`;
+    el.innerHTML = `<div class="name">${esc(p.name)}${you}</div>${streak}` +
+      (isAdmin ? `<button class="small ghost" style="color:#fff;border-color:rgba(255,255,255,.3);margin-top:6px" data-remove="${p.id}">✕ remove</button>` : "");
+  });
+
+  // win buttons — only for the players themselves (or admin)
+  const imPlaying = state.table.some((p) => p && p.clientId === clientId);
+  const canReport = a && b && (imPlaying || isAdmin);
+  $("winbtns").classList.toggle("hidden", !canReport);
+  if (canReport) {
+    $("win0").textContent = `${a.name} won`; $("win0").dataset.id = a.id;
+    $("win1").textContent = `${b.name} won`; $("win1").dataset.id = b.id;
+  }
+  $("tablenote").textContent =
+    !a && !b ? "Table's free — join the line to play." :
+    !(a && b) ? "Waiting for a challenger…" :
+    canReport ? "Tap the winner when the game ends." : "Game in progress.";
+
+  // me
+  const meOnTable = state.table.find((p) => p && p.clientId === clientId);
+  const qIdx = state.queue.findIndex((p) => p.clientId === clientId);
+  const me = meOnTable || state.queue[qIdx];
+  $("joinCard").classList.toggle("hidden", !!me);
+  $("meCard").classList.toggle("hidden", !me);
+  if (me) {
+    $("meName").textContent = me.name;
+    $("requeueMe").checked = !!me.requeue;
+    if (meOnTable) { $("meStatus").textContent = "You're on the table"; $("mePos").textContent = "🎱"; }
+    else {
+      $("meStatus").textContent = qIdx === 0 ? "You're up next!" : `${qIdx} ahead of you`;
+      $("mePos").textContent = "#" + (qIdx + 1);
+    }
+  }
+
+  // queue
+  $("queueTitle").textContent = `Up next (${state.queue.length})`;
+  $("queue").innerHTML = state.queue.length
+    ? state.queue.map((p, i) => `
+      <li class="${p.clientId === clientId ? "mine" : ""}">
+        <span class="num">${i + 1}</span>
+        <span class="grow">${esc(p.name)}${p.clientId === clientId ? " (you)" : ""}</span>
+        ${p.requeue ? `<span class="tag" title="Rejoins the line after losing">↻</span>` : ""}
+        ${isAdmin ? `<button class="small danger" data-remove="${p.id}">✕</button>` : ""}
+      </li>`).join("")
+    : `<li class="empty-q">Nobody waiting.</li>`;
+
+  // log
+  $("log").innerHTML = state.log.length
+    ? state.log.slice(0, 8).map((g) => `<li><b>${esc(g.winner)}</b> beat ${esc(g.loser)} · ${ago(g.at)}</li>`).join("")
+    : `<li>No games yet.</li>`;
+
+  // admin
+  $("adminBox").classList.toggle("hidden", !state.adminEnabled);
+  $("adminLogin").classList.toggle("hidden", isAdmin);
+  $("adminTools").classList.toggle("hidden", !isAdmin);
+}
+
+// events
+$("joinForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("nameInput").value.trim();
+  if (!name) return;
+  store("pq_name", name);
+  if (await post({ action: "join", name, requeue: $("requeueJoin").checked })) toast("You're in line");
+});
+$("leaveBtn").addEventListener("click", async () => {
+  if (confirm("Leave the line / table?")) post({ action: "leave" });
+});
+$("requeueMe").addEventListener("change", (e) => post({ action: "setRequeue", requeue: e.target.checked }));
+$("winbtns").addEventListener("click", (e) => {
+  const id = e.target.dataset.id; if (!id) return;
+  const name = e.target.textContent.replace(/ won$/, "");
+  if (confirm(`Confirm: ${name} won?`)) post({ action: "win", winnerId: id });
+});
+document.addEventListener("click", (e) => {
+  const id = e.target.dataset && e.target.dataset.remove;
+  if (id && confirm("Remove this player?")) post({ action: "remove", playerId: id });
+});
+$("adminBtn").addEventListener("click", async () => {
+  const code = $("adminInput").value;
+  const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "checkAdmin", adminCode: code }) });
+  if (r.ok) { adminCode = code; store("pq_admin", code); $("adminInput").value = ""; render(); toast("Admin unlocked"); }
+  else toast("Wrong code");
+});
+$("adminOff").addEventListener("click", () => { adminCode = ""; store("pq_admin", null); render(); });
+$("resetBtn").addEventListener("click", () => { if (confirm("Clear the table, queue and history?")) post({ action: "reset" }); });
+
+// poll every 3s while the tab is visible
+refresh();
+setInterval(() => { if (!document.hidden && !busy) refresh(); }, 3000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+</script>
+</body>
+</html>

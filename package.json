@@ -1,0 +1,7 @@
+{
+  "name": "pool-queue",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Live pool table queue for the dorm"
+}
