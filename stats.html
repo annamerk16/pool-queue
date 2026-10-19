@@ -40,6 +40,10 @@
   h2 { font: 700 13px "Space Grotesk", sans-serif; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 26px 0 10px; }
   .navlink { font: 600 13px Inter, sans-serif; color: var(--ink); text-decoration: none; border: 1px solid var(--line); padding: 5px 10px; border-radius: 99px; }
 
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin-bottom: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+  .modes button { font: 600 15px Inter, sans-serif; border: 0; border-radius: 10px; padding: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+  .modes button.on { background: var(--felt); color: #fff; }
+
   /* summary on felt, like the table on the main page */
   .felt {
     background: radial-gradient(ellipse at center, var(--felt-2), var(--felt) 70%);
@@ -113,6 +117,11 @@
     <a class="navlink" href="/">← Queue</a>
   </header>
 
+  <div class="modes" id="modes">
+    <button data-mode="singles">Singles</button>
+    <button data-mode="doubles">Doubles</button>
+  </div>
+
   <section class="felt">
     <div><div class="big" id="sPlayers">–</div><div class="lbl">players</div></div>
     <div><div class="big" id="sGames">–</div><div class="lbl">games played</div></div>
@@ -137,20 +146,24 @@ const API = "/api/queue";
 const MIN_GAMES = 5; // for ranking by win %
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-function store(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; } }
 
 const myKey = (store("pq_name") || "").trim().toLowerCase().replace(/\s+/g, " ");
 const adminCode = store("pq_admin") || "";
 let players = [], byKey = {}, adminEnabled = false;
 let sort = "wins", open = myKey || null;
+let mode = store("pq_stats_mode") === "doubles" ? "doubles" : "singles";
 
 function toast(msg) {
   const t = $("toast"); t.textContent = msg; t.classList.add("show");
   clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2600);
 }
 
-const games = (p) => p.wins + p.losses;
-const pct = (p) => (games(p) ? p.wins / games(p) : 0);
+// r(p) is the player's record in the mode being viewed
+const r = (p) => p[mode];
+const games = (p) => r(p).wins + r(p).losses;
+const totalGames = (p) => p.singles.wins + p.singles.losses + p.doubles.wins + p.doubles.losses;
+const pct = (p) => (games(p) ? r(p).wins / games(p) : 0);
 const pctTxt = (p) => (games(p) ? Math.round(pct(p) * 100) + "%" : "–");
 function when(t) {
   if (!t) return "never";
@@ -173,28 +186,34 @@ async function load() {
 }
 
 const sorters = {
-  wins: (a, b) => b.wins - a.wins || pct(b) - pct(a),
-  pct: (a, b) => (games(b) >= MIN_GAMES) - (games(a) >= MIN_GAMES) || pct(b) - pct(a) || b.wins - a.wins,
-  games: (a, b) => games(b) - games(a) || b.wins - a.wins,
-  streak: (a, b) => b.bestStreak - a.bestStreak || b.wins - a.wins,
+  wins: (a, b) => r(b).wins - r(a).wins || pct(b) - pct(a),
+  pct: (a, b) => (games(b) >= MIN_GAMES) - (games(a) >= MIN_GAMES) || pct(b) - pct(a) || r(b).wins - r(a).wins,
+  games: (a, b) => games(b) - games(a) || r(b).wins - r(a).wins,
+  streak: (a, b) => r(b).bestStreak - r(a).bestStreak || r(b).wins - r(a).wins,
 };
 
 function render() {
-  // summary
-  const total = players.reduce((n, p) => n + p.wins, 0);
-  const champ = players.reduce((best, p) => (!best || p.bestStreak > best.bestStreak ? p : best), null);
-  $("sPlayers").textContent = players.length;
+  for (const b of $("modes").children) b.classList.toggle("on", b.dataset.mode === mode);
+
+  // only people who've played this mode (plus brand-new names, so admins can tidy them up)
+  const list = players.filter((p) => games(p) > 0 || totalGames(p) === 0);
+
+  // summary (in doubles every game has two winners)
+  const total = list.reduce((n, p) => n + r(p).wins, 0) / (mode === "doubles" ? 2 : 1);
+  const top = Math.max(0, ...list.map((p) => r(p).bestStreak));
+  const champs = list.filter((p) => top && r(p).bestStreak === top).map((p) => p.name);
+  $("sPlayers").textContent = list.filter((p) => games(p) > 0).length;
   $("sGames").textContent = total;
-  $("sStreak").textContent = champ && champ.bestStreak ? champ.bestStreak : "–";
-  $("sStreakWho").textContent = champ && champ.bestStreak ? champ.name : "";
+  $("sStreak").textContent = top || "–";
+  $("sStreakWho").textContent = champs.length > 2 ? `${champs.length} players` : champs.join(" & ");
 
   $("hint").textContent = sort === "pct" ? `Players with fewer than ${MIN_GAMES} games are listed after everyone else.` : "Tap a player to see their record.";
 
-  const ranked = [...players].sort(sorters[sort]);
+  const ranked = [...list].sort(sorters[sort]);
   const q = $("search").value.trim().toLowerCase();
   const shown = ranked.map((p, i) => ({ p, rank: i + 1 })).filter(({ p }) => !q || p.name.toLowerCase().includes(q));
 
-  if (!players.length) { $("board").innerHTML = `<div class="empty">No games yet. Records start the first time someone joins the line.</div>`; return; }
+  if (!list.length) { $("board").innerHTML = `<div class="empty">No ${mode} games yet.</div>`; return; }
   if (!shown.length) { $("board").innerHTML = `<div class="empty">Nobody called “${esc(q)}”.</div>`; return; }
 
   $("board").innerHTML = shown.map(({ p, rank }) => `
@@ -203,28 +222,36 @@ function render() {
         <span class="rank ${rank <= 3 && games(p) ? "top" : ""}">${rank}</span>
         <span class="pname"><b>${esc(p.name)}${p.key === myKey ? " (you)" : ""}</b>
           <div class="bar">${games(p) ? `<i style="width:${pct(p) * 100}%"></i>` : ""}</div></span>
-        <span class="nums"><div class="wl">${p.wins}–${p.losses}</div><div class="pct">${pctTxt(p)}</div></span>
+        <span class="nums"><div class="wl">${r(p).wins}–${r(p).losses}</div><div class="pct">${pctTxt(p)}</div></span>
       </button>
       ${open === p.key ? detail(p) : ""}
     </div>`).join("");
 }
 
+// [{name, w, l}] from a {key: [wins, losses]} map, most games first
+const tally = (map) => Object.entries(map || {})
+  .map(([k, [w, l]]) => ({ name: byKey[k] ? byKey[k].name : k, w, l }))
+  .sort((a, b) => b.w + b.l - (a.w + a.l));
+
+const wlList = (rows, prefix) => rows.length
+  ? `<ul class="h2h">${rows.map((o) => `<li><span>${prefix}${esc(o.name)}</span><span class="${o.w > o.l ? "lead" : o.w < o.l ? "trail" : ""}">${o.w}–${o.l}</span></li>`).join("")}</ul>`
+  : `<div class="muted">Nobody yet.</div>`;
+
 function detail(p) {
-  const h2h = Object.entries(p.vs)
-    .map(([k, [w, l]]) => ({ name: byKey[k] ? byKey[k].name : k, w, l }))
-    .sort((a, b) => b.w + b.l - (a.w + a.l));
-  const form = p.form ? [...p.form].reverse() : []; // oldest → newest, left to right
+  const rec = r(p);
+  const form = rec.form ? [...rec.form].reverse() : []; // oldest → newest, left to right
 
   return `<div class="detail">
     <div class="grid">
       <div class="stat"><div class="v">${games(p)}</div><div class="k">games</div></div>
       <div class="stat"><div class="v">${pctTxt(p)}</div><div class="k">win rate</div></div>
-      <div class="stat"><div class="v">${p.bestStreak}</div><div class="k">best streak</div></div>
+      <div class="stat"><div class="v">${rec.bestStreak}</div><div class="k">best streak</div></div>
     </div>
     <div class="sub">Last ${form.length || ""} games</div>
     ${form.length ? `<div class="form">${form.map((r) => `<span class="${r}">${r}</span>`).join("")}</div>` : `<div class="muted">No games yet.</div>`}
-    <div class="sub">Head to head</div>
-    ${h2h.length ? `<ul class="h2h">${h2h.map((o) => `<li><span>vs ${esc(o.name)}</span><span class="${o.w > o.l ? "lead" : o.w < o.l ? "trail" : ""}">${o.w}–${o.l}</span></li>`).join("")}</ul>` : `<div class="muted">Nobody yet.</div>`}
+    ${mode === "doubles" ? `<div class="sub">With partners</div>${wlList(tally(rec.partners), "with ")}` : ""}
+    <div class="sub">${mode === "doubles" ? "Against opponents" : "Head to head"}</div>
+    ${wlList(tally(rec.vs), "vs ")}
     <p class="muted" style="font-size:12px;margin:12px 0 0">First seen ${when(p.firstSeen)} · last played ${when(p.lastPlayed)}</p>
     ${adminEnabled && adminCode ? `<div class="admin">
       <select id="mergeInto"><option value="">Merge into…</option>${players.filter((o) => o.key !== p.key).sort((a, b) => a.name.localeCompare(b.name)).map((o) => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join("")}</select>
@@ -264,6 +291,10 @@ $("sorts").addEventListener("click", (e) => {
   render();
 });
 $("search").addEventListener("input", render);
+$("modes").addEventListener("click", (e) => {
+  const m = e.target.dataset.mode; if (!m || m === mode) return;
+  mode = m; store("pq_stats_mode", m); render();
+});
 
 load();
 setInterval(() => { if (!document.hidden && document.activeElement.id !== "mergeInto") load(); }, 15000);

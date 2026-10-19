@@ -42,6 +42,10 @@
   .dot.off { background: var(--red); }
   .navlink { font: 600 13px Inter, sans-serif; color: var(--ink); text-decoration: none; border: 1px solid var(--line); padding: 5px 10px; border-radius: 99px; }
   .headright { display: flex; align-items: center; gap: 12px; }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin-bottom: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+  .modes button { background: transparent; color: var(--muted); padding: 8px; }
+  .modes button.on { background: var(--felt); color: #fff; }
+  input.partner { display: block; width: 100%; margin-top: 8px; }
   .rec { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; margin-left: 6px; }
 
   /* table */
@@ -128,6 +132,11 @@
   </header>
 
   <!-- TABLE -->
+  <div class="modes" id="modes">
+    <button data-mode="singles">Singles</button>
+    <button data-mode="doubles">Doubles</button>
+  </div>
+
   <section class="table">
     <div class="seats">
       <div class="seat" id="seat0"></div>
@@ -144,12 +153,15 @@
   <!-- ME -->
   <h2>You</h2>
   <div class="card" id="joinCard">
-    <form class="row" id="joinForm">
-      <input type="text" id="nameInput" placeholder="Your name" maxlength="24" autocomplete="nickname" list="knownNames" required />
+    <form id="joinForm">
+      <div class="row">
+        <input type="text" id="nameInput" placeholder="Your name" maxlength="24" autocomplete="nickname" list="knownNames" required />
+        <button type="submit">Join line</button>
+      </div>
+      <input type="text" id="partnerInput" class="partner hidden" placeholder="Partner's name" maxlength="24" autocomplete="off" list="knownNames" />
       <datalist id="knownNames"></datalist>
-      <button type="submit">Join line</button>
     </form>
-    <label class="toggle"><input type="checkbox" id="requeueJoin" checked /> Put me back in line when I lose</label>
+    <label class="toggle"><input type="checkbox" id="requeueJoin" checked /> <span class="requeueText">Put me back in line when I lose</span></label>
     <p style="margin:10px 0 0;color:var(--muted);font-size:13px">Use the same name every time and your wins and losses add up on the <a href="/stats.html" style="color:inherit">stats page</a>.</p>
   </div>
   <div class="card hidden" id="meCard">
@@ -160,7 +172,7 @@
       </div>
       <div class="pos" id="mePos"></div>
     </div>
-    <label class="toggle"><input type="checkbox" id="requeueMe" /> Put me back in line when I lose</label>
+    <label class="toggle"><input type="checkbox" id="requeueMe" /> <span class="requeueText">Put me back in line when I lose</span></label>
     <div class="row" style="margin-top:14px">
       <button class="danger" id="leaveBtn" style="flex:1">Leave</button>
     </div>
@@ -170,9 +182,12 @@
   <div id="adminAdd" class="hidden">
     <h2>Add players <span class="tag" style="vertical-align:middle">admin</span></h2>
     <div class="card">
-      <form class="row" id="addForm">
-        <input type="text" id="addName" placeholder="Name" maxlength="24" autocomplete="off" list="knownNames" />
-        <button type="submit">Add</button>
+      <form id="addForm">
+        <div class="row">
+          <input type="text" id="addName" placeholder="Name" maxlength="24" autocomplete="off" list="knownNames" />
+          <button type="submit">Add</button>
+        </div>
+        <input type="text" id="addPartner" class="partner hidden" placeholder="Partner's name" maxlength="24" autocomplete="off" list="knownNames" />
       </form>
       <div class="row" style="margin-top:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
         <label class="toggle" style="margin:0"><input type="checkbox" id="addRequeue" checked /> Requeue on loss</label>
@@ -221,6 +236,7 @@ let clientId = store("pq_client");
 if (!clientId) { clientId = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)); store("pq_client", clientId); }
 let adminCode = store("pq_admin") || "";
 $("nameInput").value = store("pq_name") || "";
+$("partnerInput").value = store("pq_partner") || "";
 
 let state = null;
 let busy = false;
@@ -269,9 +285,20 @@ async function loadNames() {
 
 const recOf = (p) => (state.records || {})[p.id];
 
+const isOccupied = () => state.queue.length > 0 || state.table.some(Boolean);
+
 function render() {
   if (!state) return;
   const isAdmin = !!adminCode;
+
+  // mode
+  const doubles = state.mode === "doubles";
+  for (const b of $("modes").children) b.classList.toggle("on", b.dataset.mode === state.mode);
+  $("partnerInput").classList.toggle("hidden", !doubles); $("partnerInput").required = doubles;
+  $("addPartner").classList.toggle("hidden", !doubles);
+  $("addName").placeholder = doubles ? "Player 1" : "Name";
+  $("addPartner").placeholder = "Player 2";
+  for (const el of document.querySelectorAll(".requeueText")) el.textContent = doubles ? "Put us back in line when we lose" : "Put me back in line when I lose";
   const [a, b] = state.table;
 
   // seats
@@ -350,9 +377,11 @@ function render() {
 $("joinForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = $("nameInput").value.trim();
+  const partner = $("partnerInput").value.trim();
   if (!name) return;
   store("pq_name", name);
-  if (await post({ action: "join", name, requeue: $("requeueJoin").checked })) toast("You're in line");
+  if (state && state.mode === "doubles") store("pq_partner", partner);
+  if (await post({ action: "join", name, partner, requeue: $("requeueJoin").checked })) toast("You're in line");
 });
 $("leaveBtn").addEventListener("click", async () => {
   if (confirm("Leave the line / table?")) post({ action: "leave" });
@@ -372,11 +401,22 @@ document.addEventListener("click", (e) => {
 $("addForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = $("addName").value.trim();
+  const partner = $("addPartner").value.trim();
   if (!name) return;
-  if (await post({ action: "addPlayer", name, requeue: $("addRequeue").checked, front: $("addFront").checked })) {
-    $("addName").value = ""; $("addName").focus();
-    toast(`Added ${name}`);
+  if (await post({ action: "addPlayer", name, partner, requeue: $("addRequeue").checked, front: $("addFront").checked })) {
+    $("addName").value = ""; $("addPartner").value = ""; $("addName").focus();
+    toast(`Added ${partner && state.mode === "doubles" ? name + " & " + partner : name}`);
   }
+});
+$("modes").addEventListener("click", async (e) => {
+  const mode = e.target.dataset.mode;
+  if (!mode || !state || mode === state.mode) return;
+  const label = mode === "doubles" ? "doubles" : "singles";
+  if (isOccupied()) {
+    if (!adminCode) return toast("You can switch once the table and line are empty");
+    if (!confirm(`Switch to ${label}? This clears the table and the line.`)) return;
+  }
+  if (await post({ action: "setMode", mode })) toast(`Now playing ${label}`);
 });
 $("adminBtn").addEventListener("click", async () => {
   const code = $("adminInput").value;

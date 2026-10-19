@@ -41,11 +41,27 @@ async function redis(cmd) {
   return data.result;
 }
 
-const emptyState = () => ({ table: [null, null], queue: [], log: [], updatedAt: Date.now() });
+const emptyState = () => ({ mode: "singles", table: [null, null], queue: [], log: [], updatedAt: Date.now() });
+
+// Each player keeps separate singles and doubles records.
+const MODES = ["singles", "doubles"];
+const blankRecord = () => ({ wins: 0, losses: 0, bestStreak: 0, form: "", vs: {}, partners: {} });
+
+// Records saved before doubles existed kept singles stats at the top level; move them under "singles".
+function upgrade(players) {
+  for (const p of Object.values(players)) {
+    if (!p.singles) {
+      p.singles = { ...blankRecord(), wins: p.wins || 0, losses: p.losses || 0, bestStreak: p.bestStreak || 0, form: p.form || "", vs: p.vs || {} };
+      for (const k of ["wins", "losses", "bestStreak", "form", "vs"]) delete p[k];
+    }
+    p.doubles ||= blankRecord();
+  }
+  return players;
+}
 
 async function load() {
   const [raw, rawPlayers] = await redis(["MGET", KEY, PLAYERS]);
-  return { s: raw ? JSON.parse(raw) : emptyState(), players: rawPlayers ? JSON.parse(rawPlayers) : {} };
+  return { s: raw ? JSON.parse(raw) : emptyState(), players: upgrade(rawPlayers ? JSON.parse(rawPlayers) : {}) };
 }
 async function save(s) {
   s.updatedAt = Date.now();
@@ -79,26 +95,55 @@ const nameKey = (n) => clean(n).toLowerCase().replace(/\s+/g, " ");
 // Look up (or create) the permanent record for a name. The latest spelling becomes the display name.
 function register(players, name) {
   const key = nameKey(name);
-  const rec = players[key] || (players[key] = { name, wins: 0, losses: 0, bestStreak: 0, form: "", vs: {}, firstSeen: Date.now(), lastPlayed: null });
+  const rec = players[key] || (players[key] = { name, firstSeen: Date.now(), lastPlayed: null, singles: blankRecord(), doubles: blankRecord() });
   rec.name = name;
   return rec;
 }
 
-function recordGame(players, winnerName, loserName, streak) {
-  const wk = nameKey(winnerName), lk = nameKey(loserName);
-  const w = register(players, winnerName), l = register(players, loserName);
-  w.wins++; l.losses++;
-  w.bestStreak = Math.max(w.bestStreak, streak);
-  w.form = ("W" + w.form).slice(0, 10); // newest first
-  l.form = ("L" + l.form).slice(0, 10);
-  (w.vs[lk] ||= [0, 0])[0]++; // vs[opponent] = [wins, losses]
-  (l.vs[wk] ||= [0, 0])[1]++;
-  w.lastPlayed = l.lastPlayed = Date.now();
+// A queue entry is one player (singles) or a team of two (doubles).
+const namesOf = (p) => p.names || [p.name];
+const modeOf = (p) => (namesOf(p).length > 1 ? "doubles" : "singles");
+
+// vs[opponent] and partners[teammate] are [wins, losses]
+function recordGame(players, winners, losers, streak) {
+  const mode = winners.length > 1 ? "doubles" : "singles";
+  const now = Date.now();
+  const side = (team, opps, won) => {
+    for (const n of team) {
+      const rec = register(players, n), r = rec[mode], i = won ? 0 : 1;
+      if (won) { r.wins++; r.bestStreak = Math.max(r.bestStreak, streak); } else r.losses++;
+      r.form = ((won ? "W" : "L") + r.form).slice(0, 10); // newest first
+      for (const o of opps) (r.vs[nameKey(o)] ||= [0, 0])[i]++;
+      for (const m of team) if (m !== n) (r.partners[nameKey(m)] ||= [0, 0])[i]++;
+      rec.lastPlayed = now;
+    }
+  };
+  side(winners, losers, true);
+  side(losers, winners, false);
 }
 
-function nameTaken(s, name) {
-  const key = nameKey(name);
-  return [...s.queue, ...s.table].some((p) => p && nameKey(p.name) === key);
+function nameTaken(s, names) {
+  const keys = new Set(names.map(nameKey));
+  for (const p of [...s.queue, ...s.table]) {
+    const hit = p && namesOf(p).find((n) => keys.has(nameKey(n)));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// Names for a new queue entry: just one in singles, a pair in doubles.
+function entryNames(s, body) {
+  const name = clean(body.name);
+  if (!name) throw new UserError("Enter a name");
+  if (s.mode !== "doubles") return [name];
+  const partner = clean(body.partner);
+  if (!partner) throw new UserError("Enter your partner's name");
+  if (nameKey(partner) === nameKey(name)) throw new UserError("Partner needs a different name");
+  return [name, partner];
+}
+
+function newEntry(names, extra) {
+  return { id: uid(), name: names.join(" & "), names, ...extra };
 }
 
 function fillTable(s) {
@@ -121,13 +166,13 @@ function apply(s, players, body) {
 
   switch (action) {
     case "join": {
-      const name = clean(body.name);
-      if (!name) throw new UserError("Enter a name");
+      const names = entryNames(s, body);
       if (!clientId) throw new UserError("Missing device id");
       if (findClient(s, clientId)) throw new UserError("You're already in line or on the table");
-      if (nameTaken(s, name)) throw new UserError(`Someone named ${name} is already in line`);
-      register(players, name);
-      s.queue.push({ id: uid(), name, clientId, requeue: !!body.requeue });
+      const taken = nameTaken(s, names);
+      if (taken) throw new UserError(`Someone named ${taken} is already in line`);
+      names.forEach((n) => register(players, n));
+      s.queue.push(newEntry(names, { clientId, requeue: !!body.requeue }));
       fillTable(s);
       return;
     }
@@ -155,12 +200,12 @@ function apply(s, players, body) {
       const loserSeat = s.table.indexOf(loser);
 
       winner.streak = (winner.streak || 0) + 1;
-      recordGame(players, winner.name, loser.name, winner.streak);
+      recordGame(players, namesOf(winner), namesOf(loser), winner.streak);
       s.log.unshift({ winner: winner.name, loser: loser.name, at: Date.now() });
       s.log = s.log.slice(0, 15);
 
       s.table[loserSeat] = null;
-      if (loser.requeue) s.queue.push({ id: uid(), name: loser.name, clientId: loser.clientId, requeue: true });
+      if (loser.requeue) s.queue.push(newEntry(namesOf(loser), { clientId: loser.clientId, requeue: true }));
       fillTable(s); // winner keeps their seat; next in line steps up
       return;
     }
@@ -168,12 +213,12 @@ function apply(s, players, body) {
     // ---- admin setup tools ----
     case "addPlayer": {
       if (!isAdmin) throw new UserError("Admin code required");
-      const name = clean(body.name);
-      if (!name) throw new UserError("Enter a name");
-      if (nameTaken(s, name)) throw new UserError(`${name} is already in line`);
-      register(players, name);
+      const names = entryNames(s, body);
+      const taken = nameTaken(s, names);
+      if (taken) throw new UserError(`${taken} is already in line`);
+      names.forEach((n) => register(players, n));
       // admin-added players aren't tied to any phone
-      const p = { id: uid(), name, clientId: "admin-" + uid(), requeue: body.requeue !== false, addedByAdmin: true };
+      const p = newEntry(names, { clientId: "admin-" + uid(), requeue: body.requeue !== false, addedByAdmin: true });
       if (body.front) s.queue.unshift(p); else s.queue.push(p);
       fillTable(s);
       return;
@@ -206,7 +251,19 @@ function apply(s, players, body) {
 
     case "reset": {
       if (!isAdmin) throw new UserError("Admin code required");
-      Object.assign(s, emptyState());
+      Object.assign(s, emptyState(), { mode: s.mode });
+      return;
+    }
+
+    case "setMode": {
+      // singles and doubles entries can't share a line, so switching starts the table and line fresh
+      const mode = body.mode === "doubles" ? "doubles" : "singles";
+      if (mode === (s.mode || "singles")) return;
+      const occupied = s.queue.length || s.table.some(Boolean);
+      if (occupied && !isAdmin) throw new UserError("You can switch once the table and line are empty");
+      s.mode = mode;
+      s.table = [null, null];
+      s.queue = [];
       return;
     }
 
@@ -215,7 +272,7 @@ function apply(s, players, body) {
       if (!isAdmin) throw new UserError("Admin code required");
       if (!players[body.key]) throw new UserError("No such player");
       delete players[body.key];
-      for (const p of Object.values(players)) delete p.vs[body.key];
+      for (const p of Object.values(players)) for (const m of MODES) { delete p[m].vs[body.key]; delete p[m].partners[body.key]; }
       return;
     }
 
@@ -225,20 +282,29 @@ function apply(s, players, body) {
       const { from, into } = body;
       const a = players[from], b = players[into];
       if (!a || !b || from === into) throw new UserError("Pick two different players");
-      b.wins += a.wins; b.losses += a.losses;
-      b.bestStreak = Math.max(b.bestStreak, a.bestStreak);
-      b.firstSeen = Math.min(b.firstSeen, a.firstSeen);
-      if ((a.lastPlayed || 0) > (b.lastPlayed || 0)) { b.lastPlayed = a.lastPlayed; b.form = a.form; }
-      for (const [opp, [w, l]] of Object.entries(a.vs)) {
-        if (opp === into) continue;
-        const r = (b.vs[opp] ||= [0, 0]); r[0] += w; r[1] += l;
+      const addTo = (map, key, [w, l]) => { const r = (map[key] ||= [0, 0]); r[0] += w; r[1] += l; };
+      const aIsNewer = (a.lastPlayed || 0) > (b.lastPlayed || 0);
+      for (const m of MODES) {
+        const ra = a[m], rb = b[m];
+        rb.wins += ra.wins; rb.losses += ra.losses;
+        rb.bestStreak = Math.max(rb.bestStreak, ra.bestStreak);
+        if (aIsNewer && ra.form) rb.form = ra.form;
+        for (const map of ["vs", "partners"]) {
+          for (const [k, wl] of Object.entries(ra[map])) if (k !== into) addTo(rb[map], k, wl);
+          delete rb[map][from];
+        }
       }
+      b.firstSeen = Math.min(b.firstSeen, a.firstSeen);
+      if (aIsNewer) b.lastPlayed = a.lastPlayed;
       delete players[from];
-      delete b.vs[from];
+      // everyone else's vs/partner entries for the old name now point at the real one
       for (const [k, p] of Object.entries(players)) {
-        if (!p.vs[from]) continue;
-        if (k !== into) { const r = (p.vs[into] ||= [0, 0]); r[0] += p.vs[from][0]; r[1] += p.vs[from][1]; }
-        delete p.vs[from];
+        for (const m of MODES) for (const map of ["vs", "partners"]) {
+          const old = p[m][map][from];
+          if (!old) continue;
+          if (k !== into) addTo(p[m][map], into, old);
+          delete p[m][map][from];
+        }
       }
       return;
     }
@@ -253,14 +319,19 @@ function apply(s, players, body) {
   }
 }
 
-// Win–loss for whoever is on the table or in line, so the main page can show it
+// Win–loss for whoever is on the table or in line, so the main page can show it.
+// For a doubles team it's the pair's record together.
 function withRecords(s, players) {
   const records = {};
   for (const p of [...s.table, ...s.queue]) {
-    const r = p && players[nameKey(p.name)];
-    if (r) records[p.id] = [r.wins, r.losses];
+    if (!p) continue;
+    const [a, b] = namesOf(p);
+    const r = players[nameKey(a)];
+    if (!r) continue;
+    if (modeOf(p) === "singles") records[p.id] = [r.singles.wins, r.singles.losses];
+    else records[p.id] = r.doubles.partners[nameKey(b)] || [0, 0];
   }
-  return { ...s, records, adminEnabled: !!ADMIN_CODE };
+  return { ...s, mode: s.mode || "singles", records, adminEnabled: !!ADMIN_CODE };
 }
 
 function statsView(players) {
