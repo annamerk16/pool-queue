@@ -41,7 +41,7 @@ async function redis(cmd) {
   return data.result;
 }
 
-const emptyState = () => ({ mode: "singles", table: [null, null], queue: [], log: [], updatedAt: Date.now() });
+const emptyState = () => ({ mode: "singles", table: [null, null], queue: [], log: [], lastGame: null, updatedAt: Date.now() });
 
 // Each player keeps separate singles and doubles records.
 const MODES = ["singles", "doubles"];
@@ -122,22 +122,26 @@ function recordGame(players, winners, losers, streak) {
   side(losers, winners, false);
 }
 
-function nameTaken(s, names) {
-  const keys = new Set(names.map(nameKey));
-  for (const p of [...s.queue, ...s.table]) {
-    const hit = p && namesOf(p).find((n) => keys.has(nameKey(n)));
-    if (hit) return hit;
+// Why these names can't be added (or null if they can).
+// Singles: a name can only be in line once. Doubles: one person can queue with several partners,
+// but the exact same pair can't be in line twice. Singles and doubles entries don't clash with each other.
+function conflict(s, names, exceptId) {
+  const others = [...s.queue, ...s.table].filter((p) => p && p.id !== exceptId && namesOf(p).length === names.length);
+  if (names.length === 1) {
+    const key = nameKey(names[0]);
+    return others.some((p) => namesOf(p).some((n) => nameKey(n) === key)) ? `${names[0]} is already in line` : null;
   }
-  return null;
+  const pair = names.map(nameKey).sort().join("|");
+  return others.some((p) => namesOf(p).map(nameKey).sort().join("|") === pair) ? `${names.join(" & ")} are already in line together` : null;
 }
 
-// Names for a new queue entry: just one in singles, a pair in doubles.
+// Names for a queue entry: just one in singles, a pair in doubles.
 function entryNames(s, body) {
   const name = clean(body.name);
   if (!name) throw new UserError("Enter a name");
   if (s.mode !== "doubles") return [name];
   const partner = clean(body.partner);
-  if (!partner) throw new UserError("Enter your partner's name");
+  if (!partner) throw new UserError("Enter a partner's name");
   if (nameKey(partner) === nameKey(name)) throw new UserError("Partner needs a different name");
   return [name, partner];
 }
@@ -146,9 +150,23 @@ function newEntry(names, extra) {
   return { id: uid(), name: names.join(" & "), names, ...extra };
 }
 
+// Fill open seats from the front of the line. Only entries for the current mode can play; the others
+// keep their place until the mode switches back. Anyone already on the table is skipped too
+// (in doubles one person can be in line with more than one partner).
 function fillTable(s) {
+  const mode = s.mode || "singles";
+  // a game from before a mode switch gets to finish; after that, whoever is left waits at the front of the line
+  if (!(s.table[0] && s.table[1])) {
+    for (let i = 1; i >= 0; i--) {
+      const p = s.table[i];
+      if (p && modeOf(p) !== mode) { const { streak, ...back } = p; s.queue.unshift(back); s.table[i] = null; }
+    }
+  }
   for (let i = 0; i < 2; i++) {
-    if (!s.table[i] && s.queue.length) s.table[i] = { ...s.queue.shift(), streak: 0 };
+    if (s.table[i]) continue;
+    const playing = new Set(s.table.filter(Boolean).flatMap(namesOf).map(nameKey));
+    const j = s.queue.findIndex((p) => modeOf(p) === mode && !namesOf(p).some((n) => playing.has(nameKey(n))));
+    if (j >= 0) s.table[i] = { ...s.queue.splice(j, 1)[0], streak: 0 };
   }
 }
 
@@ -158,19 +176,42 @@ function findClient(s, clientId) {
   return null;
 }
 
+function findEntry(s, id) {
+  const p = s.queue.find((p) => p.id === id) || s.table.find((p) => p && p.id === id);
+  if (!p) throw new UserError("They're not in line anymore");
+  return p;
+}
+
+// Recent activity: games plus edits, so everyone can see who changed what.
+function note(s, text) {
+  s.log.unshift({ id: uid(), kind: "note", text, at: Date.now() });
+  s.log = s.log.slice(0, 25);
+}
+
+// A change to someone involved in the last game means it can no longer be undone cleanly.
+function touch(s, id) {
+  const g = s.lastGame;
+  if (g && [g.winner.id, g.loser.id, g.requeuedId, ...g.steppedUp.map((u) => u.id)].includes(id)) s.lastGame = null;
+}
+
+const UNDO_MINUTES = 15;
+
 class UserError extends Error {}
 
 function apply(s, players, body) {
   const { action, clientId } = body;
   const isAdmin = ADMIN_CODE && body.adminCode === ADMIN_CODE;
+  // who did it, for the activity list (honour system: it's the name saved on their phone)
+  const mine = [...s.table, ...s.queue].find((p) => p && p.clientId === clientId);
+  const by = clean(body.by) || (mine && namesOf(mine)[0]) || "Someone";
 
   switch (action) {
     case "join": {
       const names = entryNames(s, body);
       if (!clientId) throw new UserError("Missing device id");
       if (findClient(s, clientId)) throw new UserError("You're already in line or on the table");
-      const taken = nameTaken(s, names);
-      if (taken) throw new UserError(`Someone named ${taken} is already in line`);
+      const why = conflict(s, names);
+      if (why) throw new UserError(why);
       names.forEach((n) => register(players, n));
       s.queue.push(newEntry(names, { clientId, requeue: !!body.requeue }));
       fillTable(s);
@@ -178,6 +219,7 @@ function apply(s, players, body) {
     }
 
     case "leave": {
+      for (const p of [...s.queue, ...s.table]) if (p && p.clientId === clientId) touch(s, p.id);
       s.queue = s.queue.filter((p) => p.clientId !== clientId);
       s.table = s.table.map((p) => (p && p.clientId === clientId ? null : p));
       fillTable(s);
@@ -189,41 +231,132 @@ function apply(s, players, body) {
       return;
     }
 
+    // Anyone can report a result. Mistakes are fixed with "undoWin".
     case "win": {
       const [a, b] = s.table;
       if (!a || !b) throw new UserError("Need two players on the table");
-      const reporterOnTable = s.table.some((p) => p.clientId === clientId);
-      if (!reporterOnTable && !isAdmin) throw new UserError("Only the two players can report the result");
       const winner = s.table.find((p) => p.id === body.winnerId);
       if (!winner) throw new UserError("That player isn't on the table");
       const loser = winner === a ? b : a;
       const loserSeat = s.table.indexOf(loser);
+      const involved = [...namesOf(winner), ...namesOf(loser)].map(nameKey);
+      const game = {
+        winner: { ...winner }, loser: { ...loser }, loserSeat,
+        records: Object.fromEntries(involved.filter((k) => players[k]).map((k) => [k, JSON.parse(JSON.stringify(players[k]))])),
+        logId: uid(), at: Date.now(),
+      };
 
       winner.streak = (winner.streak || 0) + 1;
       recordGame(players, namesOf(winner), namesOf(loser), winner.streak);
-      s.log.unshift({ winner: winner.name, loser: loser.name, at: Date.now() });
-      s.log = s.log.slice(0, 15);
+      s.log.unshift({ id: game.logId, kind: "game", winner: winner.name, loser: loser.name, by, at: game.at });
+      s.log = s.log.slice(0, 25);
 
       s.table[loserSeat] = null;
-      if (loser.requeue) s.queue.push(newEntry(namesOf(loser), { clientId: loser.clientId, requeue: true }));
-      fillTable(s); // winner keeps their seat; next in line steps up
+      if (loser.requeue && !conflict(s, namesOf(loser))) {
+        const back = newEntry(namesOf(loser), { clientId: loser.clientId, requeue: true });
+        s.queue.push(back);
+        game.requeuedId = back.id;
+      }
+      const lineBefore = s.queue.map((p) => p.id).filter((id) => id !== game.requeuedId);
+      // winner keeps their seat and the next in line steps up — unless the mode was switched during
+      // this game, in which case the winner goes to the front of the line and the new mode takes the table
+      fillTable(s);
+      game.tableAfter = s.table.map((p) => (p ? p.id : null));
+      game.steppedUp = s.table.filter((p) => p && p.id !== winner.id).map((p) => ({ id: p.id, index: lineBefore.indexOf(p.id) }));
+      s.lastGame = game;
       return;
     }
 
-    // ---- admin setup tools ----
+    case "undoWin": {
+      // put the table, line and records back exactly as they were before the last result
+      const g = s.lastGame;
+      if (!g || Date.now() - g.at > UNDO_MINUTES * 60000) throw new UserError("Nothing to undo");
+      if (s.table.map((p) => (p ? p.id : null)).join() !== g.tableAfter.join())
+        throw new UserError("Too much has changed to undo that");
+      // take the requeued loser (and a winner sent to the front of the line) back out of the line,
+      // and return whoever stepped up to their old spots
+      const seated = s.table;
+      s.queue = s.queue.filter((p) => p.id !== g.requeuedId && p.id !== g.winner.id);
+      for (const { id, index } of [...g.steppedUp].sort((x, y) => x.index - y.index)) {
+        if (id === g.requeuedId || index < 0) continue;
+        const { streak, ...back } = seated.find((p) => p && p.id === id);
+        s.queue.splice(Math.min(index, s.queue.length), 0, back);
+      }
+      s.table = [null, null];
+      s.table[1 - g.loserSeat] = g.winner;
+      s.table[g.loserSeat] = g.loser;
+      Object.assign(players, g.records);
+      s.log = s.log.filter((e) => e.id !== g.logId);
+      note(s, `${by} undid “${g.winner.name} beat ${g.loser.name}”`);
+      s.lastGame = null;
+      return;
+    }
+
+    // ---- anyone can tidy up the line, so it works without an admin around ----
     case "addPlayer": {
-      if (!isAdmin) throw new UserError("Admin code required");
       const names = entryNames(s, body);
-      const taken = nameTaken(s, names);
-      if (taken) throw new UserError(`${taken} is already in line`);
+      const why = conflict(s, names);
+      if (why) throw new UserError(why);
       names.forEach((n) => register(players, n));
-      // admin-added players aren't tied to any phone
-      const p = newEntry(names, { clientId: "admin-" + uid(), requeue: body.requeue !== false, addedByAdmin: true });
-      if (body.front) s.queue.unshift(p); else s.queue.push(p);
+      // people added by someone else aren't tied to any phone
+      const p = newEntry(names, { clientId: "added-" + uid(), requeue: body.requeue !== false, addedBy: by });
+      if (body.front && isAdmin) s.queue.unshift(p); else s.queue.push(p);
+      note(s, `${by} added ${p.name}`);
       fillTable(s);
       return;
     }
 
+    case "editEntry": {
+      // fix a name, swap a partner, or add/drop a partner to move between singles and doubles,
+      // keeping their place in line
+      const p = findEntry(s, body.playerId);
+      const names = entryNames({ mode: clean(body.partner) ? "doubles" : "singles" }, body);
+      const why = conflict(s, names, p.id);
+      if (why) throw new UserError(why);
+      const onTable = s.table.includes(p);
+      if (onTable && names.length !== namesOf(p).length) throw new UserError("Finish this game before switching between singles and doubles");
+      if (onTable) {
+        const other = s.table.find((o) => o && o !== p);
+        const clash = other && names.find((n) => namesOf(other).some((m) => nameKey(m) === nameKey(n)));
+        if (clash) throw new UserError(`${clash} is on the other side of the table`);
+      }
+      if ("requeue" in body) p.requeue = !!body.requeue;
+      const oldName = p.name;
+      const newName = names.join(" & ");
+      if (newName === oldName) return;
+      names.forEach((n) => register(players, n));
+      p.names = names; p.name = newName;
+      if (onTable) p.streak = 0; // a different team starts a fresh streak
+      touch(s, p.id);
+      note(s, `${by} changed ${oldName} to ${newName}`);
+      fillTable(s);
+      return;
+    }
+
+    case "remove": {
+      const p = findEntry(s, body.playerId);
+      touch(s, p.id);
+      s.queue = s.queue.filter((q) => q !== p);
+      s.table = s.table.map((q) => (q === p ? null : q));
+      if (p.clientId !== clientId) note(s, `${by} removed ${p.name}`);
+      fillTable(s);
+      return;
+    }
+
+    case "setMode": {
+      // nobody loses their spot: a game in progress finishes first, and entries for the other mode
+      // wait in line until it switches back
+      const mode = body.mode === "doubles" ? "doubles" : "singles";
+      if (mode === (s.mode || "singles")) return;
+      const [a, b] = s.table;
+      const finishing = a && b && modeOf(a) !== mode;
+      s.mode = mode;
+      fillTable(s);
+      note(s, `${by} switched to ${mode}${finishing ? " (starts after this game)" : ""}`);
+      return;
+    }
+
+    // ---- admin-only ----
     case "move": {
       if (!isAdmin) throw new UserError("Admin code required");
       const i = s.queue.findIndex((p) => p.id === body.playerId);
@@ -235,35 +368,9 @@ function apply(s, players, body) {
       return;
     }
 
-    case "adminRequeue": {
-      if (!isAdmin) throw new UserError("Admin code required");
-      for (const p of [...s.queue, ...s.table]) if (p && p.id === body.playerId) p.requeue = !!body.requeue;
-      return;
-    }
-
-    case "remove": {
-      if (!isAdmin) throw new UserError("Admin code required");
-      s.queue = s.queue.filter((p) => p.id !== body.playerId);
-      s.table = s.table.map((p) => (p && p.id === body.playerId ? null : p));
-      fillTable(s);
-      return;
-    }
-
     case "reset": {
       if (!isAdmin) throw new UserError("Admin code required");
       Object.assign(s, emptyState(), { mode: s.mode });
-      return;
-    }
-
-    case "setMode": {
-      // singles and doubles entries can't share a line, so switching starts the table and line fresh
-      const mode = body.mode === "doubles" ? "doubles" : "singles";
-      if (mode === (s.mode || "singles")) return;
-      const occupied = s.queue.length || s.table.some(Boolean);
-      if (occupied && !isAdmin) throw new UserError("You can switch once the table and line are empty");
-      s.mode = mode;
-      s.table = [null, null];
-      s.queue = [];
       return;
     }
 
@@ -272,6 +379,7 @@ function apply(s, players, body) {
       if (!isAdmin) throw new UserError("Admin code required");
       if (!players[body.key]) throw new UserError("No such player");
       delete players[body.key];
+      s.lastGame = null;
       for (const p of Object.values(players)) for (const m of MODES) { delete p[m].vs[body.key]; delete p[m].partners[body.key]; }
       return;
     }
@@ -297,6 +405,7 @@ function apply(s, players, body) {
       b.firstSeen = Math.min(b.firstSeen, a.firstSeen);
       if (aIsNewer) b.lastPlayed = a.lastPlayed;
       delete players[from];
+      s.lastGame = null;
       // everyone else's vs/partner entries for the old name now point at the real one
       for (const [k, p] of Object.entries(players)) {
         for (const m of MODES) for (const map of ["vs", "partners"]) {
@@ -331,7 +440,9 @@ function withRecords(s, players) {
     if (modeOf(p) === "singles") records[p.id] = [r.singles.wins, r.singles.losses];
     else records[p.id] = r.doubles.partners[nameKey(b)] || [0, 0];
   }
-  return { ...s, mode: s.mode || "singles", records, adminEnabled: !!ADMIN_CODE };
+  const { lastGame, ...pub } = s;
+  const canUndo = !!lastGame && Date.now() - lastGame.at < UNDO_MINUTES * 60000;
+  return { ...pub, mode: s.mode || "singles", records, undo: canUndo ? { winner: lastGame.winner.name, loser: lastGame.loser.name, at: lastGame.at } : null, adminEnabled: !!ADMIN_CODE };
 }
 
 function statsView(players) {

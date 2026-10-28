@@ -7,20 +7,28 @@ A live queue for the dorm pool table. People join from their phones, the winner 
 - Storage is Upstash Redis (free tier, added from Vercel's Storage tab)
 
 ## Rules it enforces
-- One spot per phone. You can't join twice.
-- Only the two people currently playing can tap "X won," so random people can't skip the line.
+- One spot per phone. Anyone can also add people who don't have their phone.
 - The winner keeps their seat and builds a streak. The next person in line steps up.
 - The loser rejoins the back of the line if their "put me back" box is checked.
-- An optional admin code unlocks setup tools: add people by name (to the back or front of the line), reorder the line, toggle anyone's requeue setting, remove people who walked off, report any result, and clear everything. People an admin adds don't need a phone.
+- It works without an admin around. Anyone can:
+  - report a result. If it's wrong, anyone can tap **Undo** (up to 15 minutes later, as long as no newer result has been reported), which puts the table, line and stats back.
+  - edit (✎) anyone in line or on the table: fix a name, change a partner, toggle requeue, or remove someone who walked off.
+  - switch between singles and doubles.
+- Every change shows up under **Recent activity** with the name of the person who made it, so mistakes and pranks are easy to spot.
+- An optional admin code adds: reordering the line, adding someone to the front, "Clear everything," and merging or deleting records on the stats page.
 
 ## Singles and doubles
-- The Singles / Doubles switch above the table sets the mode. Anyone can switch when the table and line are empty. An admin can switch anytime, but that clears the table and line.
+- The Singles / Doubles switch above the table sets the mode. Switching never clears anything:
+  - A game in progress finishes and counts. Then the winner goes to the front of the line, and the new mode takes the table.
+  - People in line for the other mode keep their spot (marked "waiting for singles/doubles") and are up again when the mode switches back.
+  - Someone waiting can tap ✎ / Edit to add a partner (singles → doubles) or drop one (doubles → singles) without losing their place.
 - In doubles, one phone joins for a team: your name plus your partner's. The winning team stays on and the losing team rejoins together if their box is checked.
+- One person can be in line with different partners at the same time ("Anna & Cara" and "Anna & Eve"). If they're already on the table, their other team is skipped and keeps its place until that game ends.
 - "Clear everything" keeps the current mode.
 
 ## Player records
 - No sign-up. A name gets a permanent record the first time it joins, and every win or loss is added to it. Names match regardless of capitals or extra spaces ("anna" = "Anna").
-- Two people with the same name can't be in line at the same time, so records don't get mixed up.
+- In singles, two people with the same name can't be in line at the same time, so records don't get mixed up. In doubles the same pair can't be in line twice.
 - Singles and doubles records are kept separately. In doubles each player gets their own win–loss, plus a record with each partner and against each opponent.
 - `stats.html` shows a leaderboard for each mode (sort by wins, win %, games or best streak). Tap a player to see their last 10 games and their head-to-head records (plus partners in doubles).
 - "Clear everything" resets the table and line but **never** the records.

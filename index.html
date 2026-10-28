@@ -46,6 +46,16 @@
   .modes button { background: transparent; color: var(--muted); padding: 8px; }
   .modes button.on { background: var(--felt); color: #fff; }
   input.partner { display: block; width: 100%; margin-top: 8px; }
+  .undo { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; opacity: .9; }
+  .undo button { background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.3); padding: 5px 12px; font-size: 13px; }
+  .seat .edit { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.3); margin-top: 6px; }
+  .log li.note { font-style: italic; }
+  ol.queue li.other .grow { color: var(--muted); }
+  dialog { border: 0; border-radius: 16px; padding: 18px; width: min(420px, calc(100vw - 32px)); background: var(--card); color: var(--ink); }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  dialog h3 { font: 700 18px "Space Grotesk", sans-serif; margin: 0 0 12px; }
+  dialog .actions { display: flex; gap: 8px; margin-top: 16px; }
+  dialog input[type=text] { display: block; width: 100%; margin-top: 8px; }
   .rec { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; margin-left: 6px; }
 
   /* table */
@@ -148,6 +158,7 @@
       <button id="win1"></button>
     </div>
     <div class="tablenote" id="tablenote"></div>
+    <div class="undo hidden" id="undoBar"><span id="undoText"></span><button id="undoBtn">Undo</button></div>
   </section>
 
   <!-- ME -->
@@ -174,26 +185,8 @@
     </div>
     <label class="toggle"><input type="checkbox" id="requeueMe" /> <span class="requeueText">Put me back in line when I lose</span></label>
     <div class="row" style="margin-top:14px">
+      <button class="ghost" id="editMeBtn" style="flex:1">Edit</button>
       <button class="danger" id="leaveBtn" style="flex:1">Leave</button>
-    </div>
-  </div>
-
-  <!-- ADMIN: ADD PLAYERS -->
-  <div id="adminAdd" class="hidden">
-    <h2>Add players <span class="tag" style="vertical-align:middle">admin</span></h2>
-    <div class="card">
-      <form id="addForm">
-        <div class="row">
-          <input type="text" id="addName" placeholder="Name" maxlength="24" autocomplete="off" list="knownNames" />
-          <button type="submit">Add</button>
-        </div>
-        <input type="text" id="addPartner" class="partner hidden" placeholder="Partner's name" maxlength="24" autocomplete="off" list="knownNames" />
-      </form>
-      <div class="row" style="margin-top:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
-        <label class="toggle" style="margin:0"><input type="checkbox" id="addRequeue" checked /> Requeue on loss</label>
-        <label class="toggle" style="margin:0"><input type="checkbox" id="addFront" /> Add to front</label>
-      </div>
-      <p style="margin:10px 0 0;color:var(--muted);font-size:13px">Tip: add a few names in a row to set up the line. The first two go straight to the table.</p>
     </div>
   </div>
 
@@ -201,8 +194,25 @@
   <h2 id="queueTitle">Up next</h2>
   <div class="queuebox"><ol class="queue" id="queue"></ol></div>
 
+  <!-- ADD SOMEONE ELSE -->
+  <h2>Add someone else</h2>
+  <div class="card">
+    <form id="addForm">
+      <div class="row">
+        <input type="text" id="addName" placeholder="Name" maxlength="24" autocomplete="off" list="knownNames" />
+        <button type="submit">Add</button>
+      </div>
+      <input type="text" id="addPartner" class="partner hidden" placeholder="Partner's name" maxlength="24" autocomplete="off" list="knownNames" />
+    </form>
+    <div class="row" style="margin-top:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+      <label class="toggle" style="margin:0"><input type="checkbox" id="addRequeue" checked /> Requeue on loss</label>
+      <label class="toggle hidden" style="margin:0" id="addFrontLabel"><input type="checkbox" id="addFront" /> Add to front</label>
+    </div>
+    <p style="margin:10px 0 0;color:var(--muted);font-size:13px" id="addHint"></p>
+  </div>
+
   <!-- LOG -->
-  <h2>Recent games</h2>
+  <h2>Recent activity</h2>
   <ul class="log" id="log"></ul>
 
   <!-- ADMIN -->
@@ -214,7 +224,7 @@
         <button class="ghost" id="adminBtn">Unlock</button>
       </div>
       <div id="adminTools" class="hidden">
-        <p style="margin:0 0 10px;color:var(--muted);font-size:13px">Admin mode on: add people above, reorder the line (↑ ↓), toggle requeue (↻), remove anyone (✕), and report any result.</p>
+        <p style="margin:0 0 10px;color:var(--muted);font-size:13px">Admin mode on: reorder the line (↑ ↓), add people to the front, and merge or delete records on the stats page. Everything else works for everyone.</p>
         <div class="row">
           <button class="danger" id="resetBtn" style="flex:1">Clear everything</button>
           <button class="ghost" id="adminOff">Lock</button>
@@ -223,6 +233,19 @@
     </div>
   </details>
 </div>
+<dialog id="editDlg">
+  <form id="editForm" method="dialog">
+    <h3 id="editTitle">Edit</h3>
+    <input type="text" id="editName" maxlength="24" autocomplete="off" list="knownNames" required />
+    <input type="text" id="editPartner" maxlength="24" autocomplete="off" list="knownNames" placeholder="Partner's name" />
+    <label class="toggle"><input type="checkbox" id="editRequeue" /> <span id="editRequeueText">Back in line after losing</span></label>
+    <div class="actions">
+      <button type="submit" style="flex:1">Save</button>
+      <button type="button" class="ghost" id="editCancel">Cancel</button>
+    </div>
+    <button type="button" class="danger" id="editRemove" style="width:100%;margin-top:8px">Remove</button>
+  </form>
+</dialog>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -249,7 +272,7 @@ function toast(msg) {
 async function post(body) {
   if (busy) return; busy = true;
   try {
-    const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId, adminCode, ...body }) });
+    const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId, adminCode, by: store("pq_name") || "", ...body }) });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || "Something went wrong");
     state = data; render();
@@ -285,7 +308,8 @@ async function loadNames() {
 
 const recOf = (p) => (state.records || {})[p.id];
 
-const isOccupied = () => state.queue.length > 0 || state.table.some(Boolean);
+const namesOf = (p) => p.names || [p.name];
+const modeOf = (p) => (namesOf(p).length > 1 ? "doubles" : "singles");
 
 function render() {
   if (!state) return;
@@ -296,8 +320,12 @@ function render() {
   for (const b of $("modes").children) b.classList.toggle("on", b.dataset.mode === state.mode);
   $("partnerInput").classList.toggle("hidden", !doubles); $("partnerInput").required = doubles;
   $("addPartner").classList.toggle("hidden", !doubles);
+  $("addPartner").required = doubles;
   $("addName").placeholder = doubles ? "Player 1" : "Name";
   $("addPartner").placeholder = "Player 2";
+  $("addHint").textContent = doubles
+    ? "For a team without a phone, or to get in line again with a different partner."
+    : "For someone without a phone. The first two in line go straight to the table.";
   for (const el of document.querySelectorAll(".requeueText")) el.textContent = doubles ? "Put us back in line when we lose" : "Put me back in line when I lose";
   const [a, b] = state.table;
 
@@ -311,21 +339,25 @@ function render() {
     const recTxt = r ? ` · ${r[0]}–${r[1]}` : "";
     const streak = p.streak ? `<div class="sub"><span class="crown">♛</span> ${p.streak} win${p.streak > 1 ? "s" : ""} in a row${recTxt}</div>` : `<div class="sub">challenger${recTxt}</div>`;
     el.innerHTML = `<div class="name">${esc(p.name)}${you}</div>${streak}` +
-      (isAdmin ? `<button class="small ghost" style="color:#fff;border-color:rgba(255,255,255,.3);margin-top:6px" data-remove="${p.id}">✕ remove</button>` : "");
+      `<button class="small edit" data-edit="${p.id}">✎ edit</button>`;
   });
 
-  // win buttons — only for the players themselves (or admin)
-  const imPlaying = state.table.some((p) => p && p.clientId === clientId);
-  const canReport = a && b && (imPlaying || isAdmin);
+  // win buttons — anyone can report; a wrong result can be undone
+  const canReport = !!(a && b);
   $("winbtns").classList.toggle("hidden", !canReport);
   if (canReport) {
     $("win0").textContent = `${a.name} won`; $("win0").dataset.id = a.id;
     $("win1").textContent = `${b.name} won`; $("win1").dataset.id = b.id;
   }
+  const waiting = state.queue.filter((p) => modeOf(p) === state.mode).length;
   $("tablenote").textContent =
+    a && b && modeOf(a) !== state.mode ? `Last ${modeOf(a)} game. ${doubles ? "Doubles" : "Singles"} starts after this one.` :
     !a && !b ? "Table's free — join the line to play." :
+    !(a && b) && waiting ? "Next in line includes someone already playing. They're up after this game." :
     !(a && b) ? "Waiting for a challenger…" :
-    canReport ? "Tap the winner when the game ends." : "Game in progress.";
+    "Tap the winner when the game ends.";
+  $("undoBar").classList.toggle("hidden", !state.undo);
+  if (state.undo) $("undoText").textContent = `Last: ${state.undo.winner} beat ${state.undo.loser}`;
 
   // me
   const meOnTable = state.table.find((p) => p && p.clientId === clientId);
@@ -338,7 +370,9 @@ function render() {
     $("requeueMe").checked = !!me.requeue;
     if (meOnTable) { $("meStatus").textContent = "You're on the table"; $("mePos").textContent = "🎱"; }
     else {
-      $("meStatus").textContent = qIdx === 0 ? "You're up next!" : `${qIdx} ahead of you`;
+      $("meStatus").textContent = modeOf(me) !== state.mode
+        ? `Waiting for ${modeOf(me)} to come back. Tap Edit to ${doubles ? "add a partner" : "drop your partner"}.`
+        : qIdx === 0 ? "You're up next!" : `${qIdx} ahead of you`;
       $("mePos").textContent = "#" + (qIdx + 1);
     }
   }
@@ -347,28 +381,29 @@ function render() {
   $("queueTitle").textContent = `Up next (${state.queue.length})`;
   $("queue").innerHTML = state.queue.length
     ? state.queue.map((p, i) => `
-      <li class="${p.clientId === clientId ? "mine" : ""}">
+      <li class="${p.clientId === clientId ? "mine" : ""} ${modeOf(p) !== state.mode ? "other" : ""}">
         <span class="num">${i + 1}</span>
         <span class="grow">${esc(p.name)}${p.clientId === clientId ? " (you)" : ""}${recOf(p) ? `<span class="rec">${recOf(p)[0]}–${recOf(p)[1]}</span>` : ""}</span>
-        ${isAdmin
-          ? `<span class="admin-row">
-               <button class="small ghost ${p.requeue ? "on" : ""}" data-requeue="${p.id}" data-val="${p.requeue ? 0 : 1}" title="Requeue on loss">↻</button>
-               <button class="small ghost" data-move="${p.id}" data-dir="-1" ${i === 0 ? "disabled" : ""} title="Move up">↑</button>
-               <button class="small ghost" data-move="${p.id}" data-dir="1" ${i === state.queue.length - 1 ? "disabled" : ""} title="Move down">↓</button>
-               <button class="small danger" data-remove="${p.id}" title="Remove">✕</button>
-             </span>`
-          : (p.requeue ? `<span class="tag" title="Rejoins the line after losing">↻</span>` : "")}
+        ${modeOf(p) !== state.mode ? `<span class="tag" title="Keeps their spot until ${modeOf(p)} is back on">waiting for ${modeOf(p)}</span>` : ""}
+        ${p.requeue ? `<span class="tag" title="Rejoins the line after losing">↻</span>` : ""}
+        <span class="admin-row">
+          ${isAdmin ? `<button class="small ghost" data-move="${p.id}" data-dir="-1" ${i === 0 ? "disabled" : ""} title="Move up">↑</button>
+          <button class="small ghost" data-move="${p.id}" data-dir="1" ${i === state.queue.length - 1 ? "disabled" : ""} title="Move down">↓</button>` : ""}
+          <button class="small ghost" data-edit="${p.id}" title="Edit or remove">✎</button>
+        </span>
       </li>`).join("")
     : `<li class="empty-q">Nobody waiting.</li>`;
 
   // log
   $("log").innerHTML = state.log.length
-    ? state.log.slice(0, 8).map((g) => `<li><b>${esc(g.winner)}</b> beat ${esc(g.loser)} · ${ago(g.at)}</li>`).join("")
-    : `<li>No games yet.</li>`;
+    ? state.log.slice(0, 10).map((g) => g.kind === "note"
+        ? `<li class="note">${esc(g.text)} · ${ago(g.at)}</li>`
+        : `<li><b>${esc(g.winner)}</b> beat ${esc(g.loser)}${g.by ? ` · reported by ${esc(g.by)}` : ""} · ${ago(g.at)}</li>`).join("")
+    : `<li>Nothing yet.</li>`;
 
   // admin
   $("adminBox").classList.toggle("hidden", !state.adminEnabled);
-  $("adminAdd").classList.toggle("hidden", !isAdmin);
+  $("addFrontLabel").classList.toggle("hidden", !isAdmin);
   $("adminLogin").classList.toggle("hidden", isAdmin);
   $("adminTools").classList.toggle("hidden", !isAdmin);
 }
@@ -390,13 +425,54 @@ $("requeueMe").addEventListener("change", (e) => post({ action: "setRequeue", re
 $("winbtns").addEventListener("click", (e) => {
   const id = e.target.dataset.id; if (!id) return;
   const name = e.target.textContent.replace(/ won$/, "");
-  if (confirm(`Confirm: ${name} won?`)) post({ action: "win", winnerId: id });
+  const playing = state.table.some((p) => p && p.clientId === clientId);
+  if (confirm(playing ? `Confirm: ${name} won?` : `You're not playing this game. Report that ${name} won?`)) post({ action: "win", winnerId: id });
+});
+$("undoBtn").addEventListener("click", async () => {
+  if (state.undo && confirm(`Undo “${state.undo.winner} beat ${state.undo.loser}”? The table, line and stats go back to how they were.`) &&
+      await post({ action: "undoWin" })) toast("Result undone");
 });
 document.addEventListener("click", (e) => {
   const d = (e.target.closest && e.target.closest("button") || {}).dataset || {};
-  if (d.remove && confirm("Remove this player?")) post({ action: "remove", playerId: d.remove });
   if (d.move) post({ action: "move", playerId: d.move, dir: Number(d.dir) });
-  if (d.requeue) post({ action: "adminRequeue", playerId: d.requeue, requeue: d.val === "1" });
+  if (d.edit) openEditor(d.edit);
+});
+
+// edit / remove anyone in line or on the table
+let editing = null;
+function openEditor(id) {
+  const p = [...state.table, ...state.queue].find((q) => q && q.id === id);
+  if (!p) return;
+  editing = p;
+  const names = namesOf(p);
+  const team = names.length > 1;
+  const onTable = state.table.includes(p);
+  $("editTitle").textContent = p.clientId === clientId ? (team ? "Your team" : "You") : `Edit ${p.name}`;
+  $("editName").value = names[0];
+  $("editPartner").value = names[1] || "";
+  // adding or dropping a partner moves them between singles and doubles (not mid-game)
+  $("editPartner").classList.toggle("hidden", onTable && !team); $("editPartner").required = onTable && team;
+  $("editPartner").placeholder = onTable ? "Partner's name" : team ? "Partner (leave empty for singles)" : "Partner (to play doubles)";
+  $("editName").placeholder = team ? "Player 1" : "Name";
+  $("editRequeue").checked = !!p.requeue;
+  $("editRequeueText").textContent = team ? "Put them back in line when they lose" : "Back in line after losing";
+  $("editRemove").textContent = onTable ? "Remove from the table" : "Remove from the line";
+  $("editDlg").showModal();
+}
+$("editForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!editing) return;
+  const ok = await post({ action: "editEntry", playerId: editing.id, name: $("editName").value.trim(), partner: $("editPartner").value.trim(), requeue: $("editRequeue").checked });
+  if (ok) { $("editDlg").close(); toast("Saved"); }
+});
+$("editCancel").addEventListener("click", () => $("editDlg").close());
+$("editRemove").addEventListener("click", async () => {
+  if (!editing || !confirm(`Remove ${editing.name}?`)) return;
+  if (await post({ action: "remove", playerId: editing.id })) { $("editDlg").close(); toast(`Removed ${editing.name}`); }
+});
+$("editMeBtn").addEventListener("click", () => {
+  const me = [...state.table, ...state.queue].find((p) => p && p.clientId === clientId);
+  if (me) openEditor(me.id);
 });
 $("addForm").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -412,11 +488,9 @@ $("modes").addEventListener("click", async (e) => {
   const mode = e.target.dataset.mode;
   if (!mode || !state || mode === state.mode) return;
   const label = mode === "doubles" ? "doubles" : "singles";
-  if (isOccupied()) {
-    if (!adminCode) return toast("You can switch once the table and line are empty");
-    if (!confirm(`Switch to ${label}? This clears the table and the line.`)) return;
-  }
-  if (await post({ action: "setMode", mode })) toast(`Now playing ${label}`);
+  const [a, b] = state.table;
+  const finishing = a && b && modeOf(a) !== mode;
+  if (await post({ action: "setMode", mode })) toast(finishing ? `Switching to ${label} after this game` : `Now playing ${label}`);
 });
 $("adminBtn").addEventListener("click", async () => {
   const code = $("adminInput").value;
@@ -425,7 +499,7 @@ $("adminBtn").addEventListener("click", async () => {
   else toast("Wrong code");
 });
 $("adminOff").addEventListener("click", () => { adminCode = ""; store("pq_admin", null); render(); });
-$("resetBtn").addEventListener("click", () => { if (confirm("Clear the table, queue and history?")) post({ action: "reset" }); });
+$("resetBtn").addEventListener("click", () => { if (confirm("Clear the table, line and recent activity? Player stats are kept.")) post({ action: "reset" }); });
 
 // poll every 3s while the tab is visible
 refresh();
